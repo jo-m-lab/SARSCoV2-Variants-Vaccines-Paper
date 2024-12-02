@@ -1,0 +1,721 @@
+---
+title: "Compositional & Cell Subset Analysis"
+subtitle: "Figure 2, Extended Data Figure 5" 
+output: html_document
+---
+
+#Setup
+
+Data is available for download from the Broad Single Cell Portal: https://singlecell.broadinstitute.org/single_cell/study/SCP2593 
+
+Set working directory to a folder containing the seurat object and participant metadata table. 
+```{r setup, include=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = "~/Analysis_Files")
+```
+
+Load necessary libraries 
+```{r}
+#Data wrangling 
+library(dplyr)
+library(tidyverse)
+library(Matrix)
+
+#scRNA-seq 
+library(Seurat)
+
+#Plotting 
+library(ggplot2)
+library(RColorBrewer)
+library(cowplot)
+library(ggbiplot)
+library(ggdendro)
+
+#Statistics
+library(dunn.test)
+library(effsize)
+
+#ARBOL 
+#library(Matrix.utils)
+library(ARBOL)
+
+#NMF
+library(singlet)
+
+```
+
+
+Color Palettes
+```{r}
+pal.variants <- c("gray80", "aquamarine4","#9f67a0","lightsalmon2")
+
+pal.celltypes <- c(
+  # "Basal",
+  "lightblue3",
+  # "Secretory",
+  "darkseagreen",
+  # "Goblet",
+  "#486841",
+  # "Squamous",
+  "cadetblue4",
+  # "Ionocyte",
+  "#d3923c",
+  # "Deuterosomal",
+  "#844f29",
+  # "Ciliated",
+  "rosybrown3",
+  
+  # "MT.high.Ciliated",
+  "salmon3",
+  
+  # "SARSCoV2.RNA.high",
+  "palevioletred4",
+  
+  # "T.Cell",
+  "#7474b4",
+  # "Macrophage",
+  "orchid4",
+  # "Dendritic",
+  "plum3",
+  # "B.Cell"
+  "slateblue4"
+
+
+)
+
+```
+
+Load data
+```{r}
+obj <- readRDS("Variant_Vax_obj.Rds")
+
+meta <- read.csv("Walsh2025_Supplementary_Table1_Pt_Metadata.csv")
+
+```
+
+#ARBOL tree 
+
+We use the ARBOL package (https://github.com/jo-m-lab/ARBOL) to build and visualize a taxonomy of all cell subsets. 
+
+Add metadata columns to match ARBOL outputs
+```{r}
+
+obj@meta.data$tierNident <- obj@meta.data$Detailed_Annotation
+
+obj@meta.data$CellID <- rownames(obj@meta.data)
+
+obj@meta.data$sample <- obj@meta.data$Participant
+
+```
+
+Run centroid taxonomy function to create binary tree 
+```{r}
+obj <- ARBOLcentroidTaxonomy(obj,
+                             categories = c('Participant', 'Variant_Group', 'Coarse_Annotation'),
+                             diversities = c('Participant', 'Coarse_Annotation'),
+                             counts = c('Participant', 'Variant_Group', 'Coarse_Annotation'),
+                             tree_reduction='harmony', centroid_method = 'mean', distance_method = cosine,
+                             hclust_method='complete',nboot=100)
+
+```
+
+Plot taxonomy 
+```{r}
+
+ggraph(obj@misc$tax_ggraph, layout='dendrogram') + 
+    geom_edge_elbow2(aes(color = node.Coarse_Annotation_majority), width = 2) + theme_void() + 
+    scale_edge_colour_manual(values = pal.celltypes)+ 
+    expand_limits(y=-5) + 
+    new_scale_color() +
+    guides(color = FALSE) +
+    geom_node_text(aes(filter=leaf, label = name, color = Coarse_Annotation_majority), nudge_y=-1.2,vjust=0.5,hjust=0,angle=270,size=5) + 
+    scale_color_manual(values = pal.celltypes) + 
+    new_scale_color() +
+    geom_node_text(aes(filter = leaf, label = n),color='grey30',nudge_y=-.3,vjust=0.5,hjust=0,size=5,angle=270) + 
+    new_scale_color() +
+    geom_node_point(aes(filter = leaf, color=Participant_diversity),size=5,shape='square') + 
+    scale_color_gradient(low='grey90',high='grey10') +
+    theme(legend.text = element_text(size = 15), 
+          legend.title = element_text(size = 15, face = "bold")) + 
+    expand_limits(y=-10) 
+
+
+
+
+```
+
+#Compositional analysis 
+
+This approach was developed and applied by Sam Kazer in his manuscript "Primary nasal influenza infection rewires tissue-scale memory response dynamics" (DOI: 10.1016/j.immuni.2024.06.005). Code from this paper (https://github.com/jo-m-lab/IAV-nasal-sc-atlas) was adapted for the following analysis.
+
+First, make table of cells to calculate ratios. 
+```{r}
+cells.md = obj@meta.data
+cells.md$Participant = factor(as.character(cells.md$Participant), levels = sort(unique(as.character(cells.md$Participant))))
+cells.md$Detailed_Annotation = factor(cells.md$Detailed_Annotation, levels = sort(unique(as.character(cells.md$Detailed_Annotation))))
+```
+
+Calculate the frequencies and multiply by 500 (abundance)
+```{r}
+labeled.freq.table = cells.md %>% select(Participant, Coarse_Annotation, Detailed_Annotation, Variant_Group, 
+                                         Variant_Vax_Group, WHO_Score_at_Peak) %>% 
+  group_by(Participant, Detailed_Annotation, .drop = FALSE) %>% dplyr::summarise(n = n()) %>%
+  dplyr::mutate(abundance = n/sum(n)*500) %>%
+  dplyr::mutate(log_abundance = log(abundance + 1)) 
+```
+
+Create the cell type abundance matrices (57 annotated clusters, 112 Participants) 
+```{r}
+abundance.mtx = matrix(labeled.freq.table$abundance, byrow = FALSE, nrow = length(unique(obj$Detailed_Annotation)), 
+                   dimnames = list(levels(labeled.freq.table$Detailed_Annotation), levels(labeled.freq.table$Participant)))
+
+```
+
+Create associated metadata table
+```{r}
+meta_sub <- meta %>%
+  column_to_rownames("Participant") %>%
+  select(Variant_Group, 
+         Variant_Vax_Group, 
+         WHO_Score_at_Peak)
+
+
+meta_sub$Variant_Group <- factor(meta_sub$Variant_Group, levels = c("Control",
+                                                                    "Ancestral",
+                                                                    "Delta",
+                                                                    "Omicron"))
+
+#combine control groups (Ctrl Unvax and Ctrl Vax)
+meta_sub$Variant_Vax_Group[grepl("Control", meta_sub$Variant_Vax_Group)] <- "Control" 
+
+meta_sub$Variant_Vax_Group <- factor(meta_sub$Variant_Vax_Group, levels = c("Control", 
+                                                                        "Ancestral", 
+                                                                        "Delta Unvax", 
+                                                                        "Delta Vax", 
+                                                                        "Omicron Unvax", 
+                                                                        "Omicron Vax"))
+
+meta_sub$WHO_Score_at_Peak <- as.character(meta_sub$WHO_Score_at_Peak)
+
+```
+
+Create combined abundance matrix (also provided as Supplementary Table 6)
+```{r}
+pt.abundance.df <- cbind(meta_sub[,c("Variant_Group", "Variant_Vax_Group", "WHO_Score_at_Peak")], 
+                         t(as.data.frame(abundance.mtx)))
+
+```
+
+Run PCA on the log transformed matrix
+``` {r}
+abundance.mtx.log <- log(abundance.mtx + 1)
+
+abundance.pca <- prcomp(t(abundance.mtx.log), center = TRUE, scale = TRUE)
+```
+
+Plot compositional PCA with ellipses 
+```{r}
+
+ggbiplot::ggbiplot(abundance.pca, var.axes = FALSE, groups = meta_sub$Variant_Group, ellipse = TRUE, ellipse.fill = F) +  
+  scale_color_manual(values = pal.variants) + 
+  xlab("Compositional PC1 (14.0%)") +
+  ylab("Compositional PC2 (10.2%)") +
+  theme_classic() + 
+  theme(axis.title = element_text(face = "bold", color = "black", size = 12), 
+        axis.text = element_text(color = "black", size = 10), 
+        legend.text = element_text(color = "black", size = 10))
+```
+
+Plot PCA loadings 
+```{r}
+#convert to dataframe for plotting 
+pca.loading.df <- as.data.frame(abundance.pca$rotation ) %>%
+  rownames_to_column("Detailed_Annotation") %>% 
+  arrange(PC1)
+
+#add cell type so bars can be colored by cell type 
+pca.loading.df$Coarse_Annotation <- str_extract(pca.loading.df$Detailed_Annotation, "^[^.]+")
+
+#set order of cell types 
+pca.loading.df$Coarse_Annotation <- factor(pca.loading.df$Coarse_Annotation, levels = c("Basal", 
+                                                                      "Secretory", 
+                                                                      "Goblet", 
+                                                                      "Squamous", 
+                                                                      "Ionocytes", 
+                                                                      "Deuterosomal", 
+                                                                      "Ciliated", 
+                                                                      "MT-high",
+                                                                      "SARSCoV2-high", 
+                                                                      "T_Cell", 
+                                                                      "Macrophage", 
+                                                                      "Dendritic", 
+                                                                      "B_Cell"))
+
+
+#plot loadings for compositional pc1 
+ggplot(pca.loading.df, 
+       aes(x = reorder(Detailed_Annotation, PC1), y = PC1, fill = Coarse_Annotation)) + 
+  geom_bar(stat= "identity", width = 0.85) +  
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray60") +
+  scale_fill_manual(values = pal.celltypes) + 
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = 90, hjust = 0.95, color = "black"), 
+        axis.text.y = element_text(color ="black"), 
+        axis.title.x = element_blank())
+
+
+#plot loadings for compositional pc2 
+ggplot(pca.loading.df, 
+       aes(x = reorder(Detailed_Annotation, PC2), y = PC2, fill = Coarse_Annotation)) + 
+  geom_bar(stat= "identity", width = 0.85) +  
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray60") + 
+  scale_fill_manual(values = pal.celltypes) + 
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = 90, hjust = 0.95, color = "black"), 
+        axis.text.y = element_text(color = "black"), 
+        axis.title.x = element_blank())
+
+
+```
+
+Hierarchical clustering based on variant group 
+```{r}
+abundance.pca.centroids <- aggregate(abundance.pca$x, list(Variant_Group = meta_sub$Variant_Group), mean) %>%
+  tibble::column_to_rownames("Variant_Group")
+
+
+dist.conditions <- dist(abundance.pca.centroids)
+
+hc <- hclust(dist.conditions)
+
+hc.dendro <- dendro_data(hc)
+
+ggdendrogram(hc.dendro) + 
+  geom_text(data = hc.dendro$labels, aes(x = x, y = y, label=label, color = label), vjust = 1.5) + 
+  scale_color_manual(values = c(pal.variants[2], "gray60", pal.variants[3:4])) + 
+  scale_x_continuous(expand = c(.2,0)) +
+  ylab("Height") + 
+  theme(axis.text.x = element_blank(), 
+        axis.text.y = element_text(size = 12, color = "black"),
+        axis.title.y = element_text(size = 14, color = "black", face = "bold"),
+        axis.line.y = element_line(color = "gray20"),
+        axis.ticks.y = element_line(color = "gray20"),
+        legend.position = "none")
+
+
+```
+
+#Cell subset frequency analysis 
+Create dataframe of frequency of each cell subset for each participant.
+```{r}
+pt.subset.df <- as.data.frame(table(obj$Detailed_Annotation, obj$Participant)) %>% 
+  dplyr::rename(Detailed_Annotation = Var1, Participant = Var2, Number_Cells = Freq) %>%
+  group_by(Participant) %>%
+  mutate(Total_Cells_Participant = sum(Number_Cells)) %>%
+  mutate(Cell_Type_Pct_All = Number_Cells / Total_Cells_Participant * 100)
+
+#add metadata groups 
+for(pt in unique(pt.subset.df$Participant)){ 
+  pt.subset.df$Variant_Group[pt.subset.df$Participant == pt] <- meta[meta$Participant == pt, "Variant_Group"]
+  pt.subset.df$Variant_Vax_Group[pt.subset.df$Participant == pt] <- meta[meta$Participant == pt, "Variant_Vax_Group"]
+  pt.subset.df$WHO_Score_at_Peak[pt.subset.df$Participant == pt] <- meta[meta$Participant == pt, "WHO_Score_at_Peak"]
+  }
+
+```
+
+Plot frequency of all cell subsets out of all cells across variant groups 
+```{r}
+ggplot(pt.subset.df, 
+       aes(x = Variant_Group, y = Cell_Type_Pct_All, fill = Variant_Group, color = Variant_Group)) + 
+  geom_jitter(height = 0, width = .1) + 
+  scale_color_manual(values = pal.variants) + 
+  scale_y_continuous(expand = c(0,0)) + 
+  geom_boxplot(color = "black", alpha = 0.3, width = 0.3, linewidth = .5, outlier.shape = NA) + 
+  scale_fill_manual(values = pal.variants) + 
+  ylab("% of All Cells") + 
+  facet_wrap(~Detailed_Annotation, scale = "free", ncol = 4) + 
+  theme_classic() + 
+  theme(axis.title.x = element_blank(), 
+        axis.text.x = element_blank(),
+        strip.text = element_text(face = "bold"),
+        strip.background = element_rect(fill = "lightgray"), 
+        panel.spacing = unit(1, unit = "cm"))
+
+
+```
+
+Calculate statistics for all cell subset frequency comparisons 
+```{r}
+#define combinations to test 
+n_combos = ncol(combn(unique(pt.subset.df$Variant_Group),2))
+
+condition.combos <- data.frame(matrix(t(combn(unique(pt.subset.df$Variant_Group), 2)), nrow = n_combos, ncol = 2, 
+                                      dimnames = list(1:n_combos, c("Condition_1", "Condition_2"))))
+
+#set up empty dataframe to paste statistics 
+n_cell_types = length(unique(pt.subset.df$Detailed_Annotation)) 
+n_row = n_combos * n_cell_types
+freq_stats <- data.frame(matrix(nrow = n_row, ncol = 5, 
+                             dimnames = list(1:n_row, 
+                                             c("Detailed_Annotation", 
+                                               "Condition_1", 
+                                               "Condition_2",
+                                               "Dunn_pval_adj", 
+                                               "Cohen_d")))) %>%
+  mutate(Detailed_Annotation = rep(unique(pt.subset.df$Detailed_Annotation), n_combos)) %>%
+  arrange(Detailed_Annotation) %>%
+  mutate(Condition_1 = rep(condition.combos$Condition_1, n_cell_types)) %>%
+  mutate(Condition_2 = rep(condition.combos$Condition_2, n_cell_types))
+
+#calculate all statistics and add to table 
+for(cluster in unique(pt.subset.df$Detailed_Annotation)){
+  
+  df.subset <- subset(pt.subset.df, Detailed_Annotation == cluster)
+  
+
+  #all cells 
+  #KW test with dunn post-hoc  
+  dunn_res_all <- dunn.test(df.subset$Cell_Type_Pct_All, df.subset$Variant_Group, method = "bh", altp = TRUE)
+  
+  #format dunn test results in dataframe 
+  dunn_res_df_all <- data.frame(matrix(c(dunn_res_all$comparisons, dunn_res_all$altP.adjusted), 
+                                 nrow = n_combos, ncol = 2, 
+                                 dimnames = list(1:n_combos, 
+                                                 c("Comparison", "Pval_adj")))) %>%
+  separate(Comparison, into = c("Condition_1", "Condition_2"), sep = " - ")
+  
+  #go through each comparison for this cell type 
+  for(row in 1:n_combos){
+    cond_1 <- condition.combos[row, "Condition_1"]
+    cond_2 <- condition.combos[row, "Condition_2"] 
+    
+  
+    #add adjusted p value for frequency of all cells 
+    freq_stats[freq_stats$Detailed_Annotation == cluster & 
+                 freq_stats$Condition_1 == cond_1 & 
+                 freq_stats$Condition_2 == cond_2, 
+               "Dunn_pval_adj"] <- dunn_res_df_all[dunn_res_df_all$Condition_1 == cond_1 & dunn_res_df_all$Condition_2 == cond_2 | 
+                                                             dunn_res_df_all$Condition_2 == cond_1 & dunn_res_df_all$Condition_1 == cond_2, 
+                                          "Pval_adj"]
+    
+    #create further subset of only this comparison 
+    df.subset.combo <- subset(df.subset, Variant_Group %in% c(cond_1, cond_2)) 
+
+    
+    #add Cohen's d effect size for frequency of all cells 
+    freq_stats[freq_stats$Detailed_Annotation == cluster & 
+                 freq_stats$Condition_1 == cond_1 & 
+                 freq_stats$Condition_2 == cond_2, 
+               "Cohen_d"] <- cohen.d(df.subset.combo$Cell_Type_Pct_All, df.subset.combo$Variant_Group)$estimate
+    
+  }
+}
+
+
+```
+
+
+#NMF analysis  
+##Ciliated 
+Subset ciliated cells. Re-normalize data. 
+```{r}
+obj_cil <- subset(obj, Coarse_Annotation == "Ciliated") 
+
+obj_cil <- SCTransform(obj_cil, vars.to.regress = "percent.mt")
+```
+Run NMF 
+```{r}
+set.seed(100)
+obj_cil <- RunNMF(obj_cil, assay = "SCT")
+
+```
+
+Evalute genes contributing to each factor (results provided in Supplementary Table 7)
+```{r}
+cil.factors <- colnames(obj_cil@reductions$nmf@feature.loadings)
+
+cil_factor_df <- as.data.frame(matrix(nrow = 0, ncol = 3)) 
+colnames(cil_factor_df) <- c("NMF_Factor", "Gene", "Gene_Loading")
+
+for(factor in cil.factors){
+  df <- as.data.frame(obj_cil@reductions$nmf@feature.loadings) %>%
+    slice_max(.data[[factor]], n = 50)
+
+  
+  add <- as.data.frame(matrix(data = c(rep(factor, 50), 
+                                       rownames(df), 
+                                       df[[factor]]), 
+                              ncol = 3, 
+                              nrow = 50, 
+                              dimnames = list(1:50, 
+                                              c("NMF_Factor", "Gene", "Gene_Loading"))))
+  
+  cil_factor_df <- rbind(cil_factor_df, add )
+}
+
+VizDimLoadings(obj_cil, dims = 1:25, nfeatures = 40, reduction = "nmf", ncol = 5)
+
+```
+
+Evaluate factor scores for each cell across detailed annotations 
+```{r}
+obj_cil <- AddMetaData(obj_cil, obj_cil@reductions$nmf@cell.embeddings, 
+                         col.name = colnames(obj_cil@reductions$nmf@cell.embeddings))
+
+VlnPlot(obj_cil, features = colnames(obj_cil@reductions$nmf@cell.embeddings), group.by = "Detailed_Annotation") * 
+  theme(axis.title.x = element_blank()) 
+
+```
+
+Plot average factor scores for each participant within ciliated cells 
+```{r}
+
+cil.nmf.df <- cbind(obj_cil@meta.data[, c("Participant", 
+                                          "Variant_Group")], 
+  obj_cil@meta.data[, grepl("NMF", colnames(obj_cil@meta.data))]) 
+
+cil.nmf.df <- gather(cil.nmf.df, Factor, Embedding_Value, colnames(cil.nmf.df[5:29]), factor_key = T) %>%
+  group_by(Participant, Factor) %>%
+  summarize(Mean_Embedding_Value = mean(Embedding_Value), 
+            Variant_Group = unique(Variant_Group))
+
+
+cil.nmf.df$Variant_Group <- factor(cil.nmf.df$Variant_Group, levels = c("Control", "Ancestral", "Delta", "Omicron"))
+
+
+ggplot(cil.nmf.df, 
+       aes(x = Variant_Group, y = Mean_Embedding_Value, color = Variant_Group, fill = Variant_Group)) + 
+  geom_jitter(width = 0.1, height = 0) + 
+  scale_color_manual(values = pal.variants) + 
+  scale_y_continuous(expand = c(0,0)) + 
+  geom_boxplot(color = "black", alpha = 0.3, width = 0.3, linewidth = .5, outlier.shape = NA) + 
+  scale_fill_manual(values = pal.variants) + 
+  facet_wrap(~Factor, scales = "free", ncol = 4) + 
+  theme_classic() + 
+  theme(legend.position = "none", 
+        axis.title.x = element_blank(), 
+        axis.text.x = element_text(angle = 45, hjust = .9, vjust = .9),
+        strip.text = element_text(face = "bold"),
+        strip.background = element_rect(fill = "lightgray"), 
+        panel.spacing = unit(1, unit = "cm"))
+
+```
+
+Calculate statistics for average factor scores 
+```{r}
+
+#define combinations to test 
+n_combos = ncol(combn(unique(obj_cil$Variant_Group),2))
+
+condition.combos <- data.frame(matrix(t(combn(unique(obj_cil$Variant_Group), 2)), nrow = n_combos, ncol = 2, 
+                                      dimnames = list(1:n_combos, c("Condition_1", "Condition_2"))))
+
+#set up empty dataframe to paste statistics 
+n_factors = length(unique(cil.nmf.df$Factor))
+n_row = n_combos * n_factors
+
+cil_nmf_stats <- data.frame(matrix(nrow = n_row, ncol = 5, 
+                             dimnames = list(1:n_row, 
+                                             c("NMF_Factor", 
+                                               "Condition_1", 
+                                               "Condition_2",
+                                               "Dunn_pval_adj",
+                                               "Cohens_D")))) %>%
+  mutate(NMF_Factor = rep(cil.factors, n_combos)) %>%
+  arrange(NMF_Factor) %>%
+  mutate(Condition_1 = rep(condition.combos$Condition_1, n_factors)) %>%
+  mutate(Condition_2 = rep(condition.combos$Condition_2, n_factors))
+
+
+for(factor in cil.factors){
+  
+  cil.df.subset <- subset(cil.nmf.df, Factor == factor)
+  
+  dunn_res <- dunn.test(cil.df.subset$Mean_Embedding_Value, cil.df.subset$Variant_Group, method = "bh", altp = TRUE)
+  
+  dunn_res_df <- data.frame(matrix(c(dunn_res$comparisons, dunn_res$altP.adjusted), 
+                                 nrow = 6, ncol = 2, 
+                                 dimnames = list(1:6, 
+                                                 c("Comparison", "Pval_adj")))) %>%
+  separate(Comparison, into = c("Condition_1", "Condition_2"), sep = " - ")
+  
+  for(row in 1:nrow(condition.combos)){
+    cond_1 <- condition.combos[row, "Condition_1"]
+    cond_2 <- condition.combos[row, "Condition_2"] 
+    
+    cil_nmf_stats[cil_nmf_stats$NMF_Factor == factor & 
+                 cil_nmf_stats$Condition_1 == cond_1 & 
+                 cil_nmf_stats$Condition_2 == cond_2, 
+               "Dunn_pval_adj"] <- dunn_res_df[dunn_res_df$Condition_1 == cond_1 &
+                                            dunn_res_df$Condition_2 == cond_2, 
+                                          "Pval_adj"]
+    
+    #cohens d effect size 
+    res <- cohen.d(as.numeric(unlist(cil.nmf.df[cil.nmf.df$Factor == factor & cil.nmf.df$Variant_Group == cond_1, "Mean_Embedding_Value"])),
+                   as.numeric(unlist(cil.nmf.df[cil.nmf.df$Factor == factor & cil.nmf.df$Variant_Group == cond_2, "Mean_Embedding_Value"])))
+    
+    cil_nmf_stats[cil_nmf_stats$NMF_Factor == factor & 
+                     cil_nmf_stats$Condition_1 == cond_1 & 
+                     cil_nmf_stats$Condition_2 == cond_2, "Cohens_D"] <- res$estimate
+    
+  }
+}
+
+
+```
+
+
+
+##Secretory 
+
+Subset secretory cells. Re-normalize data.  
+```{r}
+obj_sec <- subset(obj, Coarse_Annotation %in% c("Basal", "Goblet", "Secretory"))
+
+obj_sec <- SCTransform(obj_cil, vars.to.regress = "percent.mt")
+```
+
+Run NMF 
+```{r}
+set.seed(100)
+obj_sec <- RunNMF(obj_sec, assay = "SCT")
+
+```
+
+Evaluate genes contributing to each factor (results provided in Supplementary Table 7)
+```{r}
+sec.factors <- colnames(obj_sec@reductions$nmf@feature.loadings)
+
+sec_factor_df <- as.data.frame(matrix(nrow = 0, ncol = 3)) 
+colnames(sec_factor_df) <- c("NMF_Factor", "Gene", "Gene_Loading")
+
+for(factor in sec.factors){
+  df <- as.data.frame(obj_sec@reductions$nmf@feature.loadings) %>%
+    slice_max(.data[[factor]], n = 50)
+
+  
+  add <- as.data.frame(matrix(data = c(rep(factor, 50), 
+                                       rownames(df), 
+                                       df[[factor]]), 
+                              ncol = 3, 
+                              nrow = 50, 
+                              dimnames = list(1:50, 
+                                              c("NMF_Factor", "Gene", "Gene_Loading"))))
+  
+  sec_factor_df <- rbind(sec_factor_df, add )
+}
+
+
+VizDimLoadings(obj_sec, dims = 1:23, nfeatures = 40, reduction = "nmf", ncol = 5)
+
+
+```
+
+Plot average factor scores for each participant within secretory cells 
+```{r}
+
+sec.nmf.df <- cbind(obj_sec@meta.data[, c("Participant", "Variant_Group")], 
+  obj_sec@meta.data[, grepl("NMF", colnames(obj_sec@meta.data))]) 
+
+sec.nmf.df <- gather(sec.nmf.df, Factor, Embedding_Value, colnames(sec.nmf.df[5:27]), factor_key = T) %>%
+  group_by(Participant, Factor) %>%
+  summarize(Mean_Embedding_Value = mean(Embedding_Value), 
+            Variant_Group = unique(Variant_Group))
+
+
+sec.nmf.df$Variant_Group <- factor(sec.nmf.df$Variant_Group, levels = c("Control", "Ancestral", "Delta", "Omicron"))
+
+ggplot(sec.nmf.df, 
+       aes(x = Variant_Group, y = Mean_Embedding_Value, color = Variant_Group, fill = Variant_Group)) + 
+  geom_jitter(width = 0.1, height = 0) + 
+  scale_color_manual(values = pal.variants) + 
+  scale_y_continuous(expand = c(0,0)) + 
+  geom_boxplot(color = "black", alpha = 0.3, width = 0.3, linewidth = .5, outlier.shape = NA) + 
+  scale_fill_manual(values = pal.variants) + 
+  facet_wrap(~Factor, scales = "free", ncol = 4) + 
+  theme_classic() + 
+  theme(legend.position = "none", 
+        axis.title.x = element_blank(), 
+        axis.text.x = element_text(angle = 45, hjust = .9, vjust = .9),
+        strip.text = element_text(face = "bold"),
+        strip.background = element_rect(fill = "lightgray"), 
+        panel.spacing = unit(1, unit = "cm"))
+  
+
+```
+
+Calculate statistics for average factor scores 
+```{r}
+
+condition.combos <- data.frame(matrix(t(combn(unique(obj_sec$Condition), 2)), nrow = 6, ncol = 2, 
+                                      dimnames = list(1:6, c("Condition_1", "Condition_2"))))
+
+sec_nmf_stats <- data.frame(matrix(nrow = 138, ncol = 5, 
+                             dimnames = list(1:138, 
+                                             c("NMF_Factor", 
+                                               "Condition_1", 
+                                               "Condition_2",
+                                               "Dunn_pval_adj",
+                                               "Cohens_D")))) %>%
+  mutate(NMF_Factor = rep(sec.factors, 6)) %>%
+  arrange(NMF_Factor) %>%
+  mutate(Condition_1 = rep(condition.combos$Condition_1, 23)) %>%
+  mutate(Condition_2 = rep(condition.combos$Condition_2, 23))
+
+
+for(factor in sec.factors){
+  
+  sec.df.subset <- subset(sec.nmf.df, Factor == factor)
+  
+  dunn_res <- dunn.test(sec.df.subset$Mean_Embedding_Value, sec.df.subset$Condition, method = "bh", altp = TRUE)
+  
+  dunn_res_df <- data.frame(matrix(c(dunn_res$comparisons, dunn_res$altP.adjusted), 
+                                 nrow = 6, ncol = 2, 
+                                 dimnames = list(1:6, 
+                                                 c("Comparison", "Pval_adj")))) %>%
+  separate(Comparison, into = c("Condition_1", "Condition_2"), sep = " - ")
+  
+  for(row in 1:nrow(condition.combos)){
+    cond_1 <- condition.combos[row, "Condition_1"]
+    cond_2 <- condition.combos[row, "Condition_2"] 
+    
+    sec_nmf_stats[sec_nmf_stats$NMF_Factor == factor & 
+                 sec_nmf_stats$Condition_1 == cond_1 & 
+                 sec_nmf_stats$Condition_2 == cond_2, 
+               "Dunn_pval_adj"] <- dunn_res_df[dunn_res_df$Condition_1 == cond_1 &
+                                            dunn_res_df$Condition_2 == cond_2, 
+                                          "Pval_adj"]
+    
+    #cohens d effect size 
+    res <- cohen.d(as.numeric(unlist(sec.nmf.df[sec.nmf.df$Factor == factor & sec.nmf.df$Condition == cond_1, "Mean_Embedding_Value"])),
+                   as.numeric(unlist(sec.nmf.df[sec.nmf.df$Factor == factor & sec.nmf.df$Condition == cond_2, "Mean_Embedding_Value"])))
+    
+    sec_nmf_stats[sec_nmf_stats$NMF_Factor == factor & 
+                     sec_nmf_stats$Condition_1 == cond_1 & 
+                     sec_nmf_stats$Condition_2 == cond_2, "Cohens_D"] <- res$estimate
+    
+  }
+}
+
+  
+write.csv(sec_nmf_stats, file = "~/Variant_Vax_202303/Revisions/sec_nmf_stats.csv")
+
+
+```
+
+
+Violin plot of factor scores across detailed secretory clusters 
+```{r}
+VlnPlot(obj_sec, features = c("NMF_6", "NMF_11",  "NMF_5", "NMF_20"), group.by = "Detailed_Annotation", 
+        fill.by = "ident",
+        cols = c(rep(pal.celltypes[1],2), pal.celltypes[3], rep(pal.celltypes[2], 10)),
+        stack = TRUE) + 
+  theme(legend.position = "none", 
+        axis.title.y = element_blank())
+
+```
+
+
+
+
+ 

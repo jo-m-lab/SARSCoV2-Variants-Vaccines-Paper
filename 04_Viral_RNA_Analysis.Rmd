@@ -1,0 +1,798 @@
+---
+title: "Viral RNA Analysis"
+subtitle: "Figure 3, Extended Data Figure 6"
+output: html_document
+---
+
+#Setup
+
+Data is available for download from the Broad Single Cell Portal: https://singlecell.broadinstitute.org/single_cell/study/SCP2593 
+
+Set working directory to a folder containing the seurat object and participant metadata table. 
+```{r setup, include=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = "~/Analysis_Files")
+```
+
+Load necessary libraries 
+```{r}
+#Data wrangling 
+library(dplyr)
+library(tidyverse)
+library(forcats)
+
+#scRNA-seq 
+library(Seurat)
+
+#Plotting 
+library(ggplot2)
+library(RColorBrewer)
+library(cowplot)
+library(ggpubr)
+library(stringr)
+library(ggrepel)
+library(ggalluvial)
+
+#Statistics
+library(dunn.test)
+library(effsize)
+
+```
+
+Color Palettes
+```{r}
+pal.variants <- c("gray80", "aquamarine4","#9f67a0","lightsalmon2")
+
+pal.variants.vax <- c("gray80", "aquamarine4","thistle", "mediumorchid4","#efad66", "#ae5d19")
+
+
+pal.pts.variants.vax <- c(rep(pal.variants.vax[2], 32),
+                           rep(pal.variants.vax[3], 19), 
+                           rep(pal.variants.vax[4], 14), 
+                           rep(pal.variants.vax[5], 10), 
+                           rep(pal.variants.vax[6], 11))
+
+pal.celltypes <- c(
+  # "Basal",
+  "lightblue3",
+  # "Secretory",
+  "darkseagreen",
+  # "Goblet",
+  "#486841",
+  # "Squamous",
+  "cadetblue4",
+  # "Ionocyte",
+  "#d3923c",
+  # "Deuterosomal",
+  "#844f29",
+  # "Ciliated",
+  "rosybrown3",
+  
+  # "MT.high.Ciliated",
+  "salmon3",
+  
+  # "SARSCoV2.RNA.high",
+  "palevioletred4",
+  
+  # "T.Cell",
+  "#7474b4",
+  # "Macrophage",
+  "orchid4",
+  # "Dendritic",
+  "plum3",
+  # "B.Cell"
+  "slateblue4"
+
+
+)
+
+
+pal.subsets <- c(pal.celltypes[13], #B
+                  rep(pal.celltypes[1], 2), #2 basal clusters 
+                  rep(pal.celltypes[7], 13), #13 ciliated clusters 
+                  pal.celltypes[12], #DC
+                  pal.celltypes[6], #deuterosomal
+                  pal.celltypes[3], #goblet 
+                  pal.celltypes[5], #ionocyte
+                  rep(pal.celltypes[11], 6),  #6 myeloid clusters
+                  rep(pal.celltypes[8], 6), #6 MT-high clusters
+                  rep(pal.celltypes[9], 5), #5 viral-high clusters 
+                  rep(pal.celltypes[2],10), #10 secretory clusters 
+                  rep(pal.celltypes[4], 5), #5 squamous clusters    
+                  rep(pal.celltypes[10], 5) #5 t cell  clusters   
+)
+
+```
+
+Load data
+```{r}
+obj <- readRDS("Variant_Vax_obj.Rds")
+
+meta <- read.csv("Walsh2025_Supplementary_Table1_Pt_Metadata.csv")
+
+```
+
+
+#Viral RNA by participant 
+
+Define percentage of transcripts in each cell that are SARSCoV2 transcripts 
+```{r}
+obj[["percent.sarscov2"]] <- PercentageFeatureSet(obj, pattern = "^SARSCoV2-", assay = "RNA")
+
+```
+
+Create dataframe to calculate percentage of cells from each participant that are SARSCoV2 RNA+ 
+```{r}
+sarscov2.df <- subset(as.data.frame(table(obj$SingleCell_SARSCoV2_RNA_Status, obj$Participant)) %>%
+  rename(SARSCoV2_Status = Var1, Participant = Var2, Number_SARSCoV2_Pos = Freq) %>%
+  group_by(Participant) %>%
+  mutate(Total_Cells_Pt = sum(Number_SARSCoV2_Pos)) %>%
+  mutate(Pct_SARSCoV2_Pos = Number_SARSCoV2_Pos / Total_Cells_Pt * 100), SARSCoV2_Status == "SARSCoV2 RNA+") %>%
+  select(-SARSCoV2_Status) %>%
+  column_to_rownames("Participant")
+
+
+metadata.select <- meta %>%
+  column_to_rownames("Participant") %>%
+  select(Variant_Group, Variant_Vax_Group, WHO_Score_at_Peak)
+
+#define order of participants 
+sarscov2.df.2<- cbind( metadata.select, sarscov2.df) %>%
+  rownames_to_column(var = "Participant") %>%
+  arrange(Variant_Vax_Group, WHO_Score_at_Peak, Participant)
+
+pt.levels <- sarscov2.df.2$Participant
+
+
+```
+
+Plot %of transcripts and % of cells for each participant
+```{r}
+#set order of participants based on order defined above 
+obj$Participant <- factor(obj$Participant, levels = pt.levels )
+
+#plot % of sarscov2 transcripts in each cell by participant 
+p1 <- VlnPlot(subset(obj, Variant_Group != "Control"), features = "percent.sarscov2", group.by = "Participant", log = TRUE, 
+              cols = pal.pts.variants.vax, pt.size = 0) + 
+  ylab("% of SARS-CoV-2 UMI per Cell") + 
+  theme(legend.position = "none", 
+        axis.text.x = element_blank(), 
+        axis.title.x = element_blank(), 
+        axis.text.y = element_text(color = "black", size = 10),
+        axis.title.y = element_text(face = "bold", color = "black", size = 12), 
+        plot.title = element_blank(), 
+        plot.margin = margin(t=10, r = 5, b= 10, l = 5, unit = "pt")) 
+
+#plot % sarscov2+ cells for each participant 
+p2 <- ggplot(subset(sarscov2.df.2, Variant_Group != "Control"), 
+       aes(x = factor(Participant, levels = pt.levels), 
+           y = Pct_SARSCoV2_Pos, fill = Variant_Vax_Group)) + 
+  geom_col() + 
+  scale_fill_manual(values = pal.variants.vax[2:6]) + 
+  scale_y_continuous(expand = c(0,0)) + 
+  ylab("% of Cells SARS-CoV-2 RNA+") + 
+  theme_classic() + 
+  theme(legend.position = "none", 
+        axis.text.x = element_text(angle = 90, vjust = 0.5, color = "black", size = 10), 
+        axis.title.x = element_blank(), 
+        axis.text.y = element_text(color = "black", size = 10), 
+        axis.title.y = element_text(face = "bold", color = "black", size = 12), 
+        plot.margin = margin(t=10, r = 10, b= 10, l = 17, unit = "pt")) 
+
+#combine plots 
+plot_grid(p1, p2, ncol = 1, rel_heights = c(.6, .75))
+
+```
+
+ Plot % of sars-cov-2 positive cells by variant group 
+```{r}
+
+ggplot(subset(sarscov2.df.2, Variant_Group != "Control"), 
+       aes(x = Variant_Group, y = Pct_SARSCoV2_Pos, fill = Variant_Group, color = Variant_Group)) + 
+  geom_jitter(height = 0, width = .1) + 
+  scale_color_manual(values = pal.variants[2:4]) + 
+  scale_y_continuous(expand = c(0,0), limits = c(1, 100), trans = "log10") + 
+  geom_boxplot(color = "black", alpha = 0.3, width = 0.3, linewidth = .5, outlier.shape = NA) + 
+  scale_fill_manual(values = pal.variants[2:4]) + 
+  ylab("% of Cells SARS-CoV-2 RNA+") + 
+  theme_classic() + 
+  theme(legend.position = "none", 
+        axis.title.x = element_blank(), 
+        axis.title.y = element_text(color = "black", face = "bold", size = 14),
+        axis.text = element_text(color = "black", size = 12))
+
+#statistics 
+dunn.test(sarscov2.df.2$Pct_SARSCoV2_Pos, 
+          sarscov2.df.2$Variant_Group, method = "bh", altp=T)
+```
+
+Plot % of sars-cov-2 positive cells by vaccination group
+```{r}
+
+ggplot(subset(sarscov2.df.2, Variant_Group %in% c("Delta", "Omicron")), 
+       aes(x = Variant_Vax_Group, y = Pct_SARSCoV2_Pos, fill = Variant_Vax_Group, color = Variant_Vax_Group)) + 
+  geom_jitter(height = 0, width = .1) + 
+  scale_color_manual(values = pal.variants.vax[3:6]) + 
+  scale_y_continuous(expand = c(0,0), limits = c(1, 100), trans = "log10") + 
+  geom_boxplot(color = "black", alpha = 0.3, width = 0.3, linewidth = .5, outlier.shape = NA) + 
+  scale_fill_manual(values = pal.variants.vax[3:6]) + 
+  ylab("% of Cells SARS-CoV-2 RNA+") + 
+  theme_classic() + 
+  theme(legend.position = "none", 
+        axis.title.x = element_blank(), 
+        axis.title.y = element_text(color = "black", face = "bold", size = 14),
+        axis.text = element_text(color = "black", size = 12))
+
+ 
+dunn.test(sarscov2.df.2$Pct_SARSCoV2_Pos, 
+          sarscov2.df.2$Variant_Vax_Group, method = "bh", altp=T)
+```
+
+Plot correlation of % sarscov-2 positive cells and severity score, separated by variant group 
+```{r}
+ggplot(subset(sarscov2.df.2, Variant_Group != "Control"), 
+       aes(x = WHO_Score_at_Peak, y = Pct_SARSCoV2_Pos, color = Variant_Group, fill = Variant_Group)) + 
+  geom_point(size = 2) + 
+  stat_cor(method = "spearman", label.x = 0, label.y = c(90, 85, 80), show.legend = FALSE) + 
+  geom_smooth(method = lm, alpha = .3) +
+  scale_color_manual(values = pal.variants[2:4]) + 
+  scale_fill_manual(values = pal.variants[2:4]) + 
+  scale_x_continuous(breaks = c(0,1,2,3,4,5,6,7,8)) + 
+  scale_y_continuous(breaks = c(0,20,40,60,80,100)) + 
+  ylab("% of Cells SARS-CoV-2 RNA+") + 
+  xlab("COVID-19 Severity Score (WHO)") + 
+  #ylab(cluster) + 
+  theme_classic() +
+  theme(axis.title = element_text(size = 14, face = "bold", color = "black"),
+        axis.text = element_text(size = 12, color = "black"), 
+        legend.position = "none")
+
+
+```
+
+#Check timing and total UMI 
+
+Evaluate the timing of sampling betwen the three cohorts. If the Delta cohort was sampled earlier, this might have influenced our ability to detect viral RNA.
+
+Plot SARSCoV2 UMI by time from symptom onset to sample collection, divided by variant 
+```{r}
+#add timing from metadata to object 
+obj <- AddMetaData(obj, NA, col.name = "Days_Symptom_Onset_to_Sample_Collection")
+for(pt in unique(meta$Participant)) {
+  obj@meta.data[obj@meta.data$Participant == pt, "Days_Symptom_Onset_to_Sample_Collection"] = 
+    meta[meta$Participant == pt, "Days_Symptom_Onset_to_Sample_Collection"]
+  
+}
+
+
+#calculate total sarscov2 UMI for each cell 
+obj.sarsov2.counts <- obj@assays$RNA@counts[grepl("SARSCoV2", rownames(obj@assays$RNA@counts)), ]
+obj$Total_SARSCoV2_UMI <- colSums(obj.sarsov2.counts)
+
+#subset to covid patients where we have timing data 
+obj_sub <- subset(obj, Variant_Group != "Control" 
+                      & is.na(obj$Days_Symptom_Onset_to_Sample_Collection) == FALSE)
+
+VlnPlot(obj_sub, 
+        features = "Total_SARSCoV2_UMI", 
+        group.by = "Days_Symptom_Onset_to_Sample_Collection", 
+        log = TRUE) +#, 
+  facet_wrap(~obj_sub@meta.data$Variant_Group) + 
+  ylab("Total SARSCoV2 UMI") + 
+  xlab("Days from Symptom Onset to Sample Collection") + 
+  theme(legend.position = "none", 
+        plot.title = element_blank(), 
+        panel.spacing = unit(25, units = "pt"), 
+        strip.background = element_rect(fill = "gray80"),
+        strip.text = element_text(color = "black", size = 12, face = "bold"), 
+        axis.title = element_text(face = "bold", size = 14, color = "black"), 
+        axis.text = element_text(color = "black", size = 10))
+
+```
+
+Not all timepoints are represented for all variants. To avoid misleading missing violins, create timing groups 
+
+```{r}
+unique(obj_sub$Days_Symptom_Onset_to_Sample_Collection)
+
+obj_sub$Timing_Group <- NA 
+obj_sub$Timing_Group[obj_sub$Days_Symptom_Onset_to_Sample_Collection %in% c(1,2)] <- "1-2"
+obj_sub$Timing_Group[obj_sub$Days_Symptom_Onset_to_Sample_Collection %in% c(3,4)] <- "3-4"
+obj_sub$Timing_Group[obj_sub$Days_Symptom_Onset_to_Sample_Collection %in% c(5,6)] <- "5-6"
+obj_sub$Timing_Group[obj_sub$Days_Symptom_Onset_to_Sample_Collection %in% c(7,8,9)] <- "7-9"
+obj_sub$Timing_Group[obj_sub$Days_Symptom_Onset_to_Sample_Collection %in% c(10,11,12)] <- "10-12"
+obj_sub$Timing_Group[obj_sub$Days_Symptom_Onset_to_Sample_Collection %in% c(14,15,16)] <- "13-16"
+obj_sub$Timing_Group[obj_sub$Days_Symptom_Onset_to_Sample_Collection %in% c(19,21)] <- "17-21"
+obj_sub$Timing_Group[obj_sub$Days_Symptom_Onset_to_Sample_Collection %in% c(23,26)] <- "22-26"
+
+#set order of timing groups 
+obj_sub$Timing_Group <- factor(obj_sub$Timing_Group, levels = c("1-2", 
+                                                                        "3-4", 
+                                                                        "5-6", 
+                                                                        "7-9",
+                                                                        "10-12",
+                                                                        "13-16", 
+                                                                        "17-21", 
+                                                                        "22-26"))
+
+#plot viral UMI by timing group 
+VlnPlot(obj_sub, 
+        features = "Total_SARSCoV2_UMI", 
+        group.by = "Timing_Group", 
+        split.by = "Variant_Group",
+        cols = pal.variants[2:4],
+        log = TRUE) + 
+        
+  facet_wrap(~obj_sub@meta.data$Variant_Group) + 
+  ylab("Total SARSCoV2 UMI") + 
+  xlab("Days from Symptom Onset to Sample Collection") + 
+  theme(legend.position = "none", 
+        plot.title = element_blank(), 
+        panel.spacing = unit(25, units = "pt"), 
+        strip.background = element_rect(fill = "gray80"),
+        strip.text = element_text(color = "black", size = 12, face = "bold"), 
+        axis.title = element_text(face = "bold", size = 14, color = "black"), 
+        axis.text = element_text(color = "black", size = 10))
+
+
+
+```
+
+It looks like there is a lot of Delta viral RNA, even at later timepoints. 
+
+Another possible explanation is differences in total transcript capture between the cohorts. 
+Plot Total UMI captured by SARSCoV2 UMI 
+```{r}
+#subset to only covid samples 
+obj_sub <- subset(obj, Variant_Group != "Control")
+
+ggplot(obj_sub@meta.data, aes(x = nCount_RNA, y = Total_SARSCoV2_UMI , color = Variant_Group)) + 
+  geom_point() + 
+  scale_x_continuous(trans = "log10") + 
+  scale_y_continuous(trans = "log10") + 
+  scale_color_manual(values = pal.variants[2:4]) + 
+  stat_cor(label.y = 5, show.legend = FALSE) + 
+  ylab("Total SARSCoV2 UMI") + 
+  xlab("Total UMI") + 
+  facet_wrap(~Variant_Group) + 
+  theme_classic() + 
+  theme(legend.position = "none",
+        panel.spacing = unit(25, units = "pt"), 
+        strip.background = element_rect(fill = "gray80"), 
+        strip.text = element_text(color = "black", size = 12, face = "bold"), 
+        axis.title = element_text(face = "bold", size = 14, color = "black"), 
+        axis.text = element_text(color = "black", size = 10))
+
+```
+While there does seem to be some correlation between total transcript capture and viral transcript capture when there are viral transcripts, this correlation is weak and is the same for all three variants. 
+
+
+#Viral RNA across cell subsets 
+
+Set order of cell subsets 
+```{r}
+detailed.annotation.order <- c(
+"Basal.KRT5.DST.KRT15",
+"Basal.MKI67.TOP2A.CENPF",
+
+"Secretory.ATF3.GDF15.EGR1",
+"Secretory.BPIFA1.BPIFB1",
+"Secretory.SCGB1A1", 
+"Secretory.CXCL8.CXCL1.CXCL2",
+"Secretory.KRT4",
+"Secretory.KRT24", 
+"Secretory.S100A9.PI3.CEACAM5",
+
+"Secretory.NEAT1.ANKRD36C.PNISR", 
+"Secretory.NFKBIA.TNFAIP3",
+"Secretory.SARSCoV2",
+
+"Goblet.MUC5AC",
+
+"Squamous.ALDH3A1.PIGR.VMO1",
+"Squamous.SPRR2E.SPRR2D.KRT78",
+"Squamous.CXCL8" ,
+"Squamous.S100A2.APOBEC3A.SFN",
+"Squamous.MT",
+
+
+"Ionocytes", 
+
+"Deuterosomal",  
+
+"Ciliated",
+"Ciliated.ALDH3A1.CYP4B1.SEC14L3", 
+"Ciliated.BEST4.CYB5A.ENPP5" ,
+"Ciliated.PIFO.CD24.COX6A1", 
+"Ciliated.DNAAF1.DNAH12", 
+"Ciliated.SYNE1.DNAH11.CFAP44",
+"Ciliated.HLA.CD74",
+"Ciliated.IFITM3.IFI6.STAT1",
+"Ciliated.ISG15.IFIT1.IFIT2" ,
+"Ciliated.SAA1.SAA2.KRT7" ,
+"Ciliated.JUN.FOS.DNAJB1", 
+"Ciliated.MT",
+"Ciliated.SERPINB3.VMO1.AQP5",   
+
+"MT-high.CAPS.DNAH5.SYNE1", 
+"MT-high.S100A9.S100A8.SPRR3", 
+"MT-high.HBB.HBA2" ,
+"MT-high.DNAJB1.HSPH1.KLF6",
+"MT-high.NEAT1.JUN.FOS",
+"MT-high",
+
+"SARSCoV2-high.SPRR3.IFNA1.S100A8",
+"SARSCoV2-high.PER2.EGR1.GDF15", 
+"SARSCoV2-high.B2M.NUPR1.IFI27",  
+"SARSCoV2-high.MT",
+"SARSCoV2-high", 
+
+"T_Cell.RPL4.RPS18" ,
+  "T_Cell.HSPA6.DEDD2.NEU1", 
+  "T_Cell.SYNE2.MACF1.NKTR" ,
+  "T_Cell.CXCR4.YPEL5.NR4A3" ,
+  "T_Cell.GNLY.GZMB.MX1"  ,
+  
+  "B_Cell.MS4A1.IGKC.CD79A", 
+  
+  "Dendritic.HLA.CCR7" ,
+  
+  
+  "Macrophage.NEAT1.HEXIM1.ZEB2" ,
+  "Macrophage.CTSD.CTSL.CD68"  ,
+  "Macrophage.CCL3.CCL4.CCRL2" ,
+  "Macrophage.CXCL5.CXCL1.SERPINB2",
+  "Macrophage.S100A8.S100A9.LYZ" ,
+  "Macrophage.CXCL10.CXCL11.IFIT1" 
+                                      
+)  
+
+
+
+```
+
+
+Plot grid with cell subsets as rows, participants as columns, dot size as percent of cells SARS-CoV-2+, and color as % of transcripts per cell that are SARS-CoV-2. Restrict to combinations of cell subsets and participants with at least 10 cells. 
+```{r}
+#create dataframe of % SARS-CoV-2 RNA+ cells 
+pt.detailed.sarscov2 <- 
+  subset(as.data.frame(table(obj$Participant, obj$Detailed_Annotation, obj$SingleCell_SARSCoV2_RNA_Status)) %>%
+    rename(Participant = Var1, Detailed_Annotation = Var2, SingleCell_SARSCoV2_RNA_Status = Var3, Number_Cells = Freq) %>%
+    group_by(Participant, Detailed_Annotation) %>%
+    mutate(Total_Cells_Pt_Detailed = sum(Number_Cells)) %>%
+    mutate(Pct_Pt_Detailed = ifelse(Total_Cells_Pt_Detailed > 10, Number_Cells/Total_Cells_Pt_Detailed * 100, NA)) %>%
+    mutate(Variant_Group= ifelse(grepl("CONTROL", Participant) == TRUE, "Control", "COVID19")), 
+  Variant_Group!= "Control" & SingleCell_SARSCoV2_RNA_Status == "SARSCoV2 RNA+") %>%
+  mutate(Pt_Detailed = paste(Participant, Detailed_Annotation, sep = "_")) %>%
+  column_to_rownames("Pt_Detailed")
+
+#create dataframe of sarscov2 transcripts per cell 
+pt.detailed.sarscov2.umi <- 
+  subset(obj@meta.data %>%
+           select(Participant, Detailed_Annotation, percent.sarscov2) %>%
+           group_by(Participant, Detailed_Annotation) %>%
+           summarise(Mean_Pct_SARSCoV2_UMI = mean(percent.sarscov2)) %>%
+           mutate(Variant_Group= ifelse(grepl("CONTROL", Participant) == TRUE, "Control", "COVID19")), 
+         Variant_Group!= "Control") %>%
+  mutate(Pt_Detailed = paste(Participant, Detailed_Annotation, sep = "_")) %>%
+  column_to_rownames("Pt_Detailed")
+
+#add %sarscov2 transcripts to first dataframe 
+pt.detailed.sarscov2$Mean_Pct_SARSCoV2_UMI <- NA
+
+for(row in rownames(pt.detailed.sarscov2.umi)){
+  pt.detailed.sarscov2[row, "Mean_Pct_SARSCoV2_UMI"] = pt.detailed.sarscov2.umi[row, "Mean_Pct_SARSCoV2_UMI"]
+}
+
+#plot grid 
+ggplot(pt.detailed.sarscov2, 
+       aes(x = factor(Participant, levels = pt.levels), 
+           y = factor(Detailed_Annotation, levels = detailed.annotation.order), 
+           size = Pct_Pt_Detailed, color = Mean_Pct_SARSCoV2_UMI)) + 
+  geom_point() + 
+  scale_radius(trans = "log10", breaks = c(1,3, 10,30,100), range = c(0,5)) + 
+  scale_color_gradient(high = "pink") + 
+  guides(size = guide_legend("% of Cells SARSCov2 RNA+"),
+         color = guide_colorbar(title = "Average % of SARSCoV2 UMI")) + 
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5),
+        axis.text.y = element_text(size = 10), 
+        panel.grid.major = element_line(color = "lightgray"), 
+        axis.title = element_blank(), 
+        axis.text = element_text(color = "black")) 
+
+```
+
+Plot ACE2 expression by cell subset  
+```{r}
+obj$Detailed_Annotation <- factor(obj$Detailed_Annotation, levels = detailed.annotation.order)
+
+dot <- DotPlot(obj, features = "ACE2", group.by = "Detailed_Annotation", dot.min = .01)
+
+detailed.ace2.df <- dot$data
+
+
+ggplot(detailed.ace2.df, 
+       aes(x = features.plot, 
+           y = factor(id, levels = detailed.annotation.order), 
+           size = pct.exp, color = avg.exp.scaled)) + 
+  geom_point() + 
+  scale_radius(trans = "log10", breaks = c(2, 4,6, 8), range = c(0,5)) + 
+  guides(size = guide_legend("% of Cells Expressing"),
+         color = guide_colorbar(title = "Average Expression")) + 
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5), 
+        panel.grid.major = element_line(color = "lightgray"), 
+        axis.title = element_blank(), 
+        axis.text = element_text(color = "black"), 
+        legend.title = element_text(size = 10)) 
+
+```
+
+ 
+#Composition of SARS-CoV-2 RNA+ cells 
+Create tables to use for input to chi-square analysis. 
+ 
+Ancestral table 
+```{r}
+#subset to one variant, and only include participants that have sarscov2 rna+ cells 
+obj.a <- subset(obj, Variant_Group== "Ancestral")
+
+pts.keep.a <- subset(
+  as.data.frame(table(obj.a$Participant, obj.a$SingleCell_SARSCoV2_RNA_Status)) %>% 
+  rename(Participant = Var1, SingleCell_SARSCoV2_RNA_Status = Var2, Number_Cells = Freq), 
+  SingleCell_SARSCoV2_RNA_Status == "SARSCoV2 RNA+" & Number_Cells > 0)$Participant
+
+obj.a <- subset(obj.a, Participant %in% pts.keep.a)
+
+sarscov2.table.a <- as.data.frame(table(obj.a$Detailed_Annotation, obj.a$SingleCell_SARSCoV2_RNA_Status)) %>%
+  rename(Detailed_Annotation = Var1, SingleCell_SARSCoV2_RNA_Status = Var2, Number_Cells = Freq) %>%
+  mutate(Total_Number_Cells = sum(Number_Cells)) %>%
+  mutate(SARSCoV2_RNA_pos = ifelse(SingleCell_SARSCoV2_RNA_Status == "SARSCoV2 RNA+", Number_Cells, NA)) %>%
+  mutate(SARSCoV2_RNA_neg = ifelse(SingleCell_SARSCoV2_RNA_Status == "SARSCoV2 RNA-", Number_Cells, NA)) %>%
+  group_by(Detailed_Annotation) %>%
+  summarise(across(everything(), ~ .[order(is.na(.))][1]), .groups = 'drop') %>%
+  select(-c(SingleCell_SARSCoV2_RNA_Status, Number_Cells)) %>%
+  mutate(Number_Cell_Type = SARSCoV2_RNA_pos + SARSCoV2_RNA_neg) %>% 
+  mutate(Cell_Type_Proportions = Number_Cell_Type / Total_Number_Cells) %>%
+  column_to_rownames("Detailed_Annotation")
+
+```
+
+Delta table 
+```{r}
+#add viral variant sequencing results from metadata to object 
+obj <- AddMetaData(obj, NA, col.name = "SARSCoV2_Scorpio_Call")
+for(pt in unique(meta$Participant)) {
+  obj@meta.data[obj@meta.data$Participant == pt, "SARSCoV2_Scorpio_Call"] = 
+    meta[meta$Participant == pt, "SARSCoV2_Scorpio_Call"]
+}
+
+#subset to Delta participants with SARSCoV-2 RNA+ cells 
+obj.d <- subset(obj, Variant_Group== "Delta")
+
+pts.keep.d <- subset(
+  as.data.frame(table(obj.d$Participant, obj.d$SingleCell_SARSCoV2_RNA_Status)) %>% 
+  dplyr::rename(Participant = Var1, SingleCell_SARSCoV2_RNA_Status = Var2, Number_Cells = Freq), 
+  SingleCell_SARSCoV2_RNA_Status == "SARSCoV2 RNA+" & Number_Cells > 0)$Participant
+
+
+#subset to those that had confirmed delta infections 
+obj.d <- subset(obj.d, Participant %in% pts.keep.d & SARSCoV2_Scorpio_Call == "Delta (B.1.617.2-like)")
+
+sarscov2.table.d <- as.data.frame(table(obj.d$Detailed_Annotation, obj.d$SingleCell_SARSCoV2_RNA_Status)) %>%
+  rename(Detailed_Annotation = Var1, SingleCell_SARSCoV2_RNA_Status = Var2, Number_Cells = Freq) %>%
+  mutate(Total_Number_Cells = sum(Number_Cells)) %>%
+  mutate(SARSCoV2_RNA_pos = ifelse(SingleCell_SARSCoV2_RNA_Status == "SARSCoV2 RNA+", Number_Cells, NA)) %>%
+  mutate(SARSCoV2_RNA_neg = ifelse(SingleCell_SARSCoV2_RNA_Status == "SARSCoV2 RNA-", Number_Cells, NA)) %>%
+  group_by(Detailed_Annotation) %>%
+  summarise(across(everything(), ~ .[order(is.na(.))][1]), .groups = 'drop') %>%
+  select(-c(SingleCell_SARSCoV2_RNA_Status, Number_Cells)) %>%
+  mutate(Number_Cell_Type = SARSCoV2_RNA_pos + SARSCoV2_RNA_neg) %>% 
+  mutate(Cell_Type_Proportions = Number_Cell_Type / Total_Number_Cells) %>%
+  column_to_rownames("Detailed_Annotation")
+
+```
+
+Omicron table 
+```{r}
+
+#subset to Omicron participants with SARS-CoV-2 RNA+ cels 
+obj.o <- subset(obj, Variant_Group== "Omicron")
+
+pts.keep.o <- subset(
+  as.data.frame(table(obj.o$Participant, obj.o$SingleCell_SARSCoV2_RNA_Status)) %>% 
+  dplyr::rename(Participant = Var1, SingleCell_SARSCoV2_RNA_Status = Var2, Number_Cells = Freq), 
+  SingleCell_SARSCoV2_RNA_Status == "SARSCoV2 RNA+" & Number_Cells > 0)$Participant
+
+#subset to those that had confirmed omicron infections 
+obj.o <- subset(obj.o, Participant %in% pts.keep.o & SARSCoV2_Scorpio_Call %in% c("Omicron (BA.1-like)", "Probable Omicron (BA.1-like)"))
+
+sarscov2.table.o <- as.data.frame(table(obj.o$Detailed_Annotation, 
+                                        obj.o$SingleCell_SARSCoV2_RNA_Status)) %>%
+  rename(Detailed_Annotation = Var1, SingleCell_SARSCoV2_RNA_Status = Var2, Number_Cells = Freq) %>%
+  mutate(Total_Number_Cells = sum(Number_Cells)) %>%
+  mutate(SARSCoV2_RNA_pos = ifelse(SingleCell_SARSCoV2_RNA_Status == "SARSCoV2 RNA+", Number_Cells, NA)) %>%
+  mutate(SARSCoV2_RNA_neg = ifelse(SingleCell_SARSCoV2_RNA_Status == "SARSCoV2 RNA-", Number_Cells, NA)) %>%
+  group_by(Detailed_Annotation) %>%
+  summarise(across(everything(), ~ .[order(is.na(.))][1]), .groups = 'drop') %>%
+  select(-c(SingleCell_SARSCoV2_RNA_Status, Number_Cells)) %>%
+  mutate(Number_Cell_Type = SARSCoV2_RNA_pos + SARSCoV2_RNA_neg) %>% 
+  mutate(Cell_Type_Proportions = Number_Cell_Type / Total_Number_Cells) %>%
+  column_to_rownames("Detailed_Annotation")
+
+```
+
+Calculate chisq results 
+``` {r}
+chisq.a <- chisq.test(x = sarscov2.table.a$SARSCoV2_RNA_pos, p = sarscov2.table.a$Cell_Type_Proportions)
+chisq.a
+
+chisq.d <- chisq.test(x = sarscov2.table.d$SARSCoV2_RNA_pos, p = sarscov2.table.d$Cell_Type_Proportions)
+chisq.d
+
+chisq.o <- chisq.test(x = sarscov2.table.o$SARSCoV2_RNA_pos, p = sarscov2.table.o$Cell_Type_Proportions)
+chisq.o
+
+#save results from all three variants in one dataframe 
+chisq.results <- data.frame(row.names = rownames(sarscov2.table.a))
+chisq.results$Ancestral <- chisq.a$stdres
+chisq.results$Delta <- chisq.d$stdres
+chisq.results$Omicron <- c(chisq.o$stdres[1:23], NA, chisq.o$stdres[24:56])
+
+#create list of cell subsets for each participant with standardized residual > 2 
+chisq.list.a <- rownames(subset(chisq.results, Ancestral > 2))
+chisq.list.d <- rownames(subset(chisq.results, Delta > 2))
+chisq.list.o <- rownames(subset(chisq.results, Omicron > 2))
+
+
+```
+
+Plot compositions for Ancestral 
+```{r}
+
+ancestral.sarscov2.df <- rbind(
+  sarscov2.table.a %>%
+  rownames_to_column("Detailed_Annotation") %>%
+  select(Detailed_Annotation, SARSCoV2_RNA_pos) %>%
+  mutate(group = "SARS-CoV-2 RNA+ Cells") %>%
+  rename(Number_Cells = SARSCoV2_RNA_pos), 
+  
+  sarscov2.table.a  %>%
+  rownames_to_column("Detailed_Annotation") %>%
+  select(Detailed_Annotation, Number_Cell_Type) %>%
+  mutate(group = "All Cells") %>%
+  rename(Number_Cells = Number_Cell_Type)) %>%
+  group_by(group) %>%
+  mutate(Pct_group = Number_Cells / sum(Number_Cells) * 100)
+
+
+
+ggplot(ancestral.sarscov2.df, 
+       aes(x = group, y = Number_Cells, fill = Detailed_Annotation, color = "black")) + 
+  geom_col(position = "fill",  width = 0.5) + 
+  scale_fill_manual(values = pal.subsets) + 
+  scale_color_manual(values = rep("black", 57)) + 
+  theme(legend.position = "none")
+
+
+
+ggplot(ancestral.sarscov2.df, 
+       aes(x = group, 
+           y = Pct_group, 
+           fill = Detailed_Annotation, stratum = Detailed_Annotation, alluvium = Detailed_Annotation, label = Detailed_Annotation))  + 
+  geom_stratum(width = 0.25, size = .25) + 
+  scale_fill_manual(values = c(pal.subsets, "white")) + 
+  scale_y_continuous(expand = c(0,0), breaks = c(0,10,20,30,40,50,60,70,80,90,100)) + 
+  geom_alluvium(aes(fill = ifelse(Detailed_Annotation %in% chisq.list.a, Detailed_Annotation, "white")), alpha = .3, width = 0.25) + 
+  ggrepel::geom_text_repel(
+    aes(label = ifelse(group == "SARS-CoV-2 RNA+ Cells" & Detailed_Annotation %in% chisq.list.a, as.character(Detailed_Annotation), NA)),
+    stat = "stratum", size = 2.5, direction = "y", nudge_x = 1.2) +
+  ylab("% of Cells") + 
+  ggtitle("Ancestral") + 
+  scale_x_discrete(expand = c(.3,0), labels = c("All cells \n n = 9399", "SARS-CoV-2 RNA+ cells \n n = 238")) + 
+  labs(caption = "X^2 = 780, p<0.001 \n labeled cell types: X^2 residual >2") + 
+  theme_classic() + 
+  theme(legend.position = "none", 
+        plot.title = element_text(face = "bold", color = "black", size = 16, hjust = 0.5),
+        axis.title.x = element_blank(), 
+        axis.title.y = element_text(face = "bold", color = "black", size = 12), 
+        axis.text = element_text(color = "black", size = 10), 
+        plot.margin = margin(10,10,10,r=10, unit = "pt"))
+
+
+```
+
+Plot compositions for Delta 
+```{r}
+
+delta.sarscov2.df <- rbind(
+  sarscov2.table.d %>%
+  rownames_to_column("Detailed_Annotation") %>%
+  select(Detailed_Annotation, SARSCoV2_RNA_pos) %>%
+  mutate(group = "SARS-CoV-2 RNA+ Cells") %>%
+  rename(Number_Cells = SARSCoV2_RNA_pos), 
+  
+  sarscov2.table.d  %>%
+  rownames_to_column("Detailed_Annotation") %>%
+  select(Detailed_Annotation, Number_Cell_Type) %>%
+  mutate(group = "All Cells") %>%
+  rename(Number_Cells = Number_Cell_Type)) %>%
+  group_by(group) %>%
+  mutate(Pct_group = Number_Cells / sum(Number_Cells) * 100)
+
+
+
+ggplot(delta.sarscov2.df, 
+       aes(x = group, 
+           y = Pct_group, 
+           fill = Detailed_Annotation, stratum = Detailed_Annotation, alluvium = Detailed_Annotation, label = Detailed_Annotation))  + 
+  geom_stratum(width = 0.25, size = 0.25) + 
+  scale_fill_manual(values = c(pal.subsets, "white")) + 
+  scale_y_continuous(expand = c(0,0), breaks = c(0,10,20,30,40,50,60,70,80,90,100)) + 
+  geom_alluvium(aes(fill = ifelse(Detailed_Annotation %in% chisq.list.d, Detailed_Annotation, "white")), alpha = .3, width = 0.25) + 
+  ggrepel::geom_text_repel(
+    aes(label = ifelse(group == "SARS-CoV-2 RNA+ Cells" & Detailed_Annotation %in% chisq.list.d, as.character(Detailed_Annotation), NA)),
+    stat = "stratum", size = 2.5, direction = "y",hjust = 1, nudge_x = 1.2) +
+  ylab("% of Cells") + 
+  ggtitle("Delta") + 
+  scale_x_discrete(expand = c(.3,0), labels = c("All cells \n n = 7418", "SARS-CoV-2 RNA+ cells \n n = 4055")) + 
+  labs(caption = "X^2 = 3782, p<0.001 \n labeled cell types: X^2 residual >2") + 
+  theme_classic() + 
+  theme(legend.position = "none", 
+        plot.title = element_text(face = "bold", color = "black", size = 16, hjust = 0.5),
+        axis.title.x = element_blank(), 
+        axis.title.y = element_text(face = "bold", color = "black", size = 12), 
+        axis.text = element_text(color = "black", size = 10), 
+        plot.margin = margin(10,10,10,10, unit = "pt"))
+
+
+```
+
+Plot compositions for Omicron 
+```{r}
+
+omicron.sarscov2.df <- rbind(
+  sarscov2.table.o %>%
+  rownames_to_column("Detailed_Annotation") %>%
+  select(Detailed_Annotation, SARSCoV2_RNA_pos) %>%
+  mutate(group = "SARS-CoV-2 RNA+ Cells") %>%
+  rename(Number_Cells = SARSCoV2_RNA_pos), 
+  
+  sarscov2.table.o %>%
+  rownames_to_column("Detailed_Annotation") %>%
+  select(Detailed_Annotation, Number_Cell_Type) %>%
+  mutate(group = "All Cells") %>%
+  rename(Number_Cells = Number_Cell_Type)) %>%
+  group_by(group) %>%
+  mutate(Pct_group = Number_Cells / sum(Number_Cells) * 100)
+
+
+
+ggplot(omicron.sarscov2.df, 
+       aes(x = group, 
+           y = Pct_group, 
+           fill = Detailed_Annotation, stratum = Detailed_Annotation, alluvium = Detailed_Annotation, label = Detailed_Annotation))  + 
+  geom_stratum(width = 0.25, size = 0.25) + 
+  scale_fill_manual(values = c(pal.subsets[1:45], pal.subsets[47:57], "white")) + 
+  scale_y_continuous(expand = c(0,0), breaks = c(0,10,20,30,40,50,60,70,80,90,100)) + 
+  geom_alluvium(aes(fill = ifelse(Detailed_Annotation %in% chisq.list.o, Detailed_Annotation, "white")), alpha = .3, width = 0.25) + 
+  ggrepel::geom_text_repel(
+    aes(label = ifelse(group == "SARS-CoV-2 RNA+ Cells" & Detailed_Annotation %in% chisq.list.o, as.character(Detailed_Annotation), NA)),
+    stat = "stratum", size = 2.5, direction = "y",hjust = 1, nudge_x = 1) +
+  ylab("% of Cells") + 
+  ggtitle("Omicron") + 
+  scale_x_discrete(expand = c(.3,0), labels = c("All cells \n n = 2276", "SARS-CoV-2 RNA+ cells \n n = 106")) + 
+  labs(caption = "X^2 = 182, p<0.001 \n labeled cell types: X^2 residual >2") + 
+  theme_classic() + 
+  theme(legend.position = "none", 
+        plot.title = element_text(face = "bold", color = "black", size = 16, hjust = 0.5),
+        axis.title.x = element_blank(), 
+        axis.title.y = element_text(face = "bold", color = "black", size = 12), 
+        axis.text = element_text(color = "black", size = 10), 
+        plot.margin = margin(10,10,10,10, unit = "pt"))
+
+
+
+```
+

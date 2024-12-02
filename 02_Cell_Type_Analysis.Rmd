@@ -1,0 +1,473 @@
+---
+title: "Cell Type Analysis"
+subtitle: "Figure 1d-1g, Extended Data Figure 2" 
+output: html_document
+---
+
+#Setup
+
+Data is available for download from the Broad Single Cell Portal: https://singlecell.broadinstitute.org/single_cell/study/SCP2593 
+
+Set working directory to a folder containing the seurat object and participant metadata table. 
+```{r setup, include=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = "~/Analysis_Files")
+```
+
+Load necessary libraries 
+```{r}
+#Data wrangling 
+library(dplyr)
+library(tidyverse)
+library(Matrix)
+
+#scRNA-seq 
+library(Seurat)
+
+#Plotting 
+library(ggplot2)
+library(RColorBrewer)
+library(cowplot)
+
+#Statistics
+library(dunn.test)
+library(effsize)
+
+```
+
+Color Palettes
+```{r}
+pal.variants <- c("gray80", "aquamarine4","#9f67a0","lightsalmon2")
+
+pal.variants.vax <- c("gray80", "aquamarine4","thistle", "mediumorchid4","#efad66", "#ae5d19")
+
+pal.severity <- brewer.pal(n = 9, name = "YlGnBu")
+
+pal.celltypes <- c(
+  # "Basal",
+  "lightblue3",
+  # "Secretory",
+  "darkseagreen",
+  # "Goblet",
+  "#486841",
+  # "Squamous",
+  "cadetblue4",
+  # "Ionocyte",
+  "#d3923c",
+  # "Deuterosomal",
+  "#844f29",
+  # "Ciliated",
+  "rosybrown3",
+  
+  # "MT.high.Ciliated",
+  "salmon3",
+  
+  # "SARSCoV2.RNA.high",
+  "palevioletred4",
+  
+  # "T.Cell",
+  "#7474b4",
+  # "Macrophage",
+  "orchid4",
+  # "Dendritic",
+  "plum3",
+  # "B.Cell"
+  "slateblue4"
+
+
+)
+
+```
+
+Load data 
+```{r}
+obj <- readRDS("Variant_Vax_obj.Rds")
+
+meta <- read.csv("Walsh2025_Supplementary_Table1_Pt_Metadata.csv")
+
+```
+
+
+#UMAP plots 
+Plot UMAP by major cell type 
+```{r}
+#set order of cell types 
+obj$Coarse_Annotation <- factor(obj$Coarse_Annotation, levels = c("Basal", 
+                                                                      "Secretory", 
+                                                                      "Goblet", 
+                                                                      "Squamous", 
+                                                                      "Ionocytes", 
+                                                                      "Deuterosomal", 
+                                                                      "Ciliated", 
+                                                                      "MT-high",
+                                                                      "SARSCoV2-high", 
+                                                                      "T_Cell", 
+                                                                      "Macrophage", 
+                                                                      "Dendritic", 
+                                                                      "B_Cell"))
+
+
+#plot umap 
+DimPlot(obj, group.by = "Coarse_Annotation", shuffle = TRUE, cols = pal.celltypes)  + 
+  theme(axis.text = element_blank(), 
+        axis.ticks = element_blank(), 
+        plot.title = element_blank(), 
+        legend.position = "right")
+
+
+```
+
+Plot UMAP by variant group 
+```{r}
+#set order of variant groups 
+obj$Variant_Group <- factor(obj$Variant_Group, levels = c("Control", 
+                                                      "Ancestral", 
+                                                      "Delta", 
+                                                      "Omicron"))
+
+
+#plot umap 
+DimPlot(obj, group.by = "Variant_Group", shuffle = TRUE, cols = pal.variants)  + 
+  theme(axis.text = element_blank(), 
+        axis.ticks = element_blank(), 
+        plot.title = element_blank())
+
+
+```
+
+Plot by vaccination group. Only plot cells from Delta and Omicron participants. 
+```{r}
+#combine control groups (Ctrl Unvax and Ctrl Vax)
+obj$Variant_Vax_Group[grepl("Control", obj$Variant_Vax_Group)] <- "Control" 
+
+#set order of vaccination groups 
+obj$Variant_Vax_Group <- factor(obj$Variant_Vax_Group, levels = c("Control",
+                                                              "Ancestral",
+                                                              "Delta Unvax",
+                                                              "Delta Vax",
+                                                              "Omicron Unvax",
+                                                              "Omicron Vax"))
+
+#plot umap
+DimPlot(subset(obj, Variant_Group %in% c("Delta", "Omicron")), 
+        group.by = "Variant_Vax_Group", shuffle = TRUE, cols = pal.variants.vax[3:6])  + 
+  theme(axis.text = element_blank(), 
+        axis.ticks = element_blank(), 
+        plot.title = element_blank())
+
+```
+
+Plot UMAP by peak WHO score (severity) 
+```{r}
+
+DimPlot(obj,
+        group.by = "WHO_Score_at_Peak", shuffle = TRUE, cols = pal.severity)  + 
+  theme(axis.text = element_blank(), 
+        axis.ticks = element_blank(), 
+        plot.title = element_blank())
+
+```
+
+
+
+#Cell type marker genes plot 
+Stacked violin plot of cell type marker genes 
+```{r}
+
+marker.genes<- c(
+  # "Basal",
+  "KRT5",
+"KRT15",
+"COL7A1",
+
+  # "Secretory",
+"SERPINB3",
+"AQP5",
+"VMO1",
+
+  # "Goblet",
+"MUC5AC",
+
+
+  # "Squamous",
+"SPRR3",
+"SPRR2A",
+"KRT6A",
+
+  # "Ionocytes",
+"RARRES2",
+"SCNN1B",
+"CFTR",
+
+  # "Deuterosomal",
+"CCNO",
+"CDC20B",
+"HES6",
+
+
+
+  # "Ciliated",
+"CAPS",
+"CFAP157",
+
+  # "Dynein-high Ciliated",
+"DNAAF1",
+"DNAH12",
+
+  # "MT-high",
+"MTRNR2L1",
+"MT-ND5",
+
+  # "Viral RNA-high",
+"SARSCoV2-S",
+"SARSCoV2-N", 
+
+
+#T cell 
+"CD3D", 
+"TRAC", 
+"CD8A",
+
+# Macrophage 
+"FCER1G", 
+"TYROBP", 
+"LYZ",
+
+#DC 
+"CCR7", 
+"CD86", 
+"HLA-DPB1",
+
+#B cell 
+"MS4A1", 
+"IGKC", 
+"CD19"
+
+)
+
+#set cell types as identities 
+Idents(obj) <- obj$Coarse_Annotation
+
+#stacked violin plot 
+VlnPlot(obj, features = marker.genes, group.by = "Coarse_Annotation", fill.by = "ident", stack = TRUE, cols = pal.celltypes) + 
+  theme(legend.position = "none", 
+        axis.title.y = element_blank())
+
+```
+
+#Cell type frequency analysis 
+
+Create dataframe of frequency of each cell type for each participant.
+```{r}
+pt.celltype.df <- as.data.frame(table(obj$Coarse_Annotation, obj$Participant)) %>% 
+  dplyr::rename(Coarse_Annotation = Var1, Participant = Var2, Number_Cells = Freq) %>%
+  group_by(Participant) %>%
+  mutate(Total_Cells_Participant = sum(Number_Cells)) %>%
+  mutate(Cell_Type_Pct_All = Number_Cells / Total_Cells_Participant * 100) %>%
+  mutate(Lineage = ifelse(Coarse_Annotation %in% c("T_Cell", "Macrophage", "Dendritic", "B_Cell"), "Immune", "Epithelial")) %>% 
+  group_by(Participant, Lineage) %>% 
+  mutate(Total_Cells_Lineage = sum(Number_Cells)) %>% 
+  mutate(Cell_Type_Pct_Lineage = Number_Cells / Total_Cells_Lineage * 100)
+
+#add metadata groups 
+for(pt in unique(pt.celltype.df$Participant)){ 
+  pt.celltype.df$Variant_Group[pt.celltype.df$Participant == pt] <- meta[meta$Participant == pt, "Variant_Group"]
+  pt.celltype.df$Variant_Vax_Group[pt.celltype.df$Participant == pt] <- meta[meta$Participant == pt, "Variant_Vax_Group"]
+  pt.celltype.df$WHO_Score_at_Peak[pt.celltype.df$Participant == pt] <- meta[meta$Participant == pt, "WHO_Score_at_Peak"]
+  }
+
+```
+
+Plot frequency of all cell types out of all cells across variant groups 
+```{r}
+ggplot(pt.celltype.df, 
+       aes(x = Variant_Group, y = Cell_Type_Pct_All, fill = Variant_Group, color = Variant_Group)) + 
+  geom_jitter(height = 0, width = .1) + 
+  scale_color_manual(values = pal.variants) + 
+  scale_y_continuous(expand = c(0,0)) + 
+  geom_boxplot(color = "black", alpha = 0.3, width = 0.3, linewidth = .5, outlier.shape = NA) + 
+  scale_fill_manual(values = pal.variants) + 
+  ylab("% of All Cells") + 
+  facet_wrap(~Coarse_Annotation, scale = "free", ncol = 4) + 
+  theme_classic() + 
+  theme(legend.position = "none", 
+        axis.title.x = element_blank(), 
+        axis.text.x = element_text(angle = 45, hjust = .9, vjust = .9),
+        strip.text = element_text(face = "bold"),
+        strip.background = element_rect(fill = "lightgray"), 
+        panel.spacing = unit(1, unit = "cm"))
+
+
+```
+
+Plot frequency of all cell types out of all cells in the lineage (immune/epithelial)  across variant groups 
+```{r}
+ggplot(pt.celltype.df, 
+       aes(x = Variant_Group, y = Cell_Type_Pct_Lineage, fill = Variant_Group, color = Variant_Group)) + 
+  geom_jitter(height = 0, width = .1) + 
+  scale_color_manual(values = pal.variants) + 
+  scale_y_continuous(expand = c(0,0)) + 
+  geom_boxplot(color = "black", alpha = 0.3, width = 0.3, linewidth = .5, outlier.shape = NA) + 
+  scale_fill_manual(values = pal.variants) + 
+  ylab("% of Immune or Epithelial Cells") + 
+  facet_wrap(~Coarse_Annotation, scale = "free", ncol = 4) + 
+  theme_classic() + 
+  theme(legend.position = "none", 
+        axis.title.x = element_blank(), 
+        axis.text.x = element_text(angle = 45, hjust = .9, vjust = .9),
+        strip.text = element_text(face = "bold"),
+        strip.background = element_rect(fill = "lightgray"), 
+        panel.spacing = unit(1, unit = "cm"))
+
+```
+
+Calculate statistics for all cell type frequency comparisons 
+```{r}
+#define combinations to test 
+n_combos = ncol(combn(unique(pt.celltype.df$Variant_Group),2))
+
+condition.combos <- data.frame(matrix(t(combn(unique(pt.celltype.df$Variant_Group), 2)), nrow = n_combos, ncol = 2, 
+                                      dimnames = list(1:n_combos, c("Condition_1", "Condition_2"))))
+
+#set up empty dataframe to paste statistics 
+n_cell_types = length(unique(pt.celltype.df$Coarse_Annotation)) 
+n_row = n_combos * n_cell_types
+freq_stats <- data.frame(matrix(nrow = n_row, ncol = 7, 
+                             dimnames = list(1:n_row, 
+                                             c("Coarse_Annotation", 
+                                               "Condition_1", 
+                                               "Condition_2",
+                                               "Dunn_pval_adj_lineage",
+                                               "Cohen_d_lineage",
+                                               "Dunn_pval_adj_all", 
+                                               "Cohen_d_all")))) %>%
+  mutate(Coarse_Annotation = rep(unique(pt.celltype.df$Coarse_Annotation), n_combos)) %>%
+  arrange(Coarse_Annotation) %>%
+  mutate(Condition_1 = rep(condition.combos$Condition_1, n_cell_types)) %>%
+  mutate(Condition_2 = rep(condition.combos$Condition_2, n_cell_types))
+
+#calculate all statistics and add to table 
+for(cluster in unique(pt.celltype.df$Coarse_Annotation)){
+  
+  df.subset <- subset(pt.celltype.df, Coarse_Annotation == cluster)
+  
+  #lineage 
+  #KW test with dunn post-hoc 
+  dunn_res_lin <- dunn.test(df.subset$Cell_Type_Pct_Lineage, df.subset$Variant_Group, method = "bh", altp = TRUE)
+  
+  #format dunn test results in dataframe 
+  dunn_res_df_lin <- data.frame(matrix(c(dunn_res_lin$comparisons, dunn_res_lin$altP.adjusted), 
+                                 nrow = n_combos, ncol = 2, 
+                                 dimnames = list(1:n_combos, 
+                                                 c("Comparison", "Pval_adj")))) %>%
+  separate(Comparison, into = c("Condition_1", "Condition_2"), sep = " - ")
+  
+  
+  #all cells 
+  #KW test with dunn post-hoc  
+  dunn_res_all <- dunn.test(df.subset$Cell_Type_Pct_All, df.subset$Variant_Group, method = "bh", altp = TRUE)
+  
+  #format dunn test results in dataframe 
+  dunn_res_df_all <- data.frame(matrix(c(dunn_res_all$comparisons, dunn_res_all$altP.adjusted), 
+                                 nrow = n_combos, ncol = 2, 
+                                 dimnames = list(1:n_combos, 
+                                                 c("Comparison", "Pval_adj")))) %>%
+  separate(Comparison, into = c("Condition_1", "Condition_2"), sep = " - ")
+  
+  #go through each comparison for this cell type 
+  for(row in 1:n_combos){
+    cond_1 <- condition.combos[row, "Condition_1"]
+    cond_2 <- condition.combos[row, "Condition_2"] 
+    
+    #add adjusted p value for frequency of lineage 
+    freq_stats[freq_stats$Coarse_Annotation == cluster & 
+                 freq_stats$Condition_1 == cond_1 & 
+                 freq_stats$Condition_2 == cond_2, 
+               "Dunn_pval_adj_lineage"] <- dunn_res_df_lin[dunn_res_df_lin$Condition_1 == cond_1 & dunn_res_df_lin$Condition_2 == cond_2 | 
+                                                             dunn_res_df_lin$Condition_2 == cond_1 & dunn_res_df_lin$Condition_1 == cond_2, 
+                                          "Pval_adj"]
+    
+    #add adjusted p value for frequency of all cells 
+    freq_stats[freq_stats$Coarse_Annotation == cluster & 
+                 freq_stats$Condition_1 == cond_1 & 
+                 freq_stats$Condition_2 == cond_2, 
+               "Dunn_pval_adj_all"] <- dunn_res_df_all[dunn_res_df_all$Condition_1 == cond_1 & dunn_res_df_all$Condition_2 == cond_2 | 
+                                                             dunn_res_df_all$Condition_2 == cond_1 & dunn_res_df_all$Condition_1 == cond_2, 
+                                          "Pval_adj"]
+    
+    #create further subset of only this comparison 
+    df.subset.combo <- subset(df.subset, Variant_Group %in% c(cond_1, cond_2)) 
+    
+    #add Cohen's d effect size for frequency of lineage 
+    freq_stats[freq_stats$Coarse_Annotation == cluster & 
+                 freq_stats$Condition_1 == cond_1 & 
+                 freq_stats$Condition_2 == cond_2, 
+               "Cohen_d_lineage"] <- cohen.d(df.subset.combo$Cell_Type_Pct_Lineage, df.subset.combo$Variant_Group)$estimate
+    
+    #add Cohen's d effect size for frequency of all cells 
+    freq_stats[freq_stats$Coarse_Annotation == cluster & 
+                 freq_stats$Condition_1 == cond_1 & 
+                 freq_stats$Condition_2 == cond_2, 
+               "Cohen_d_all"] <- cohen.d(df.subset.combo$Cell_Type_Pct_All, df.subset.combo$Variant_Group)$estimate
+    
+  }
+}
+
+
+```
+
+Stacked bar charts 
+```{r}
+#by variant group 
+ggplot(pt.celltype.df, aes(x = Variant_Group, y = Number_Cells, fill = Coarse_Annotation)) + 
+  geom_col(position = "fill", width = 0.6) + 
+  scale_fill_manual(values = pal.celltypes) + 
+  scale_y_continuous(expand = c(0,0)) + 
+  ylab("Fraction of All Cells") + 
+  theme_classic() + 
+  theme(axis.title.x = element_blank(), 
+        axis.text = element_text(size = 12, color = "black"), 
+        axis.title.y = element_text(size = 14, color = "black", face = "bold"), 
+        legend.title = element_text(size = 12, color = "black", face = "bold"), 
+        legend.text = element_text(size = 12, color = "black"))
+
+#by vaccination group 
+ggplot(subset(pt.celltype.df, Variant_Group %in% c("Delta", "Omicron")), 
+       aes(x = Variant_Vax_Group, y = Number_Cells, fill = Coarse_Annotation)) + 
+  geom_col(position = "fill", width = 0.6) + 
+  scale_fill_manual(values = pal.celltypes) + 
+  scale_y_continuous(expand = c(0,0)) + 
+  ylab("Fraction of All Cells") + 
+  theme_classic() + 
+  theme(axis.title.x = element_blank(), 
+        axis.text = element_text(size = 12, color = "black"), 
+        axis.title.y = element_text(size = 14, color = "black", face = "bold"), 
+        legend.title = element_text(size = 12, color = "black", face = "bold"), 
+        legend.text = element_text(size = 12, color = "black"))
+```
+
+# SARS-CoV-2 entry factors plot
+```{r}
+entry.genes <- c( 
+  "ACE2", 
+  "TMPRSS2", 
+  "TMPRSS4", 
+  "TMPRSS11D", 
+  "TMPRSS13",
+  "FURIN",
+  "CTSL", 
+  "CTSB", 
+  "CTSS", 
+  "ADAM10", 
+  "ADAM17",
+  "AXL", 
+  "BSG", 
+  "NRP1")
+
+ DotPlot(obj, features = entry.genes, group.by = "Coarse_Annotation", dot.min = .01) + 
+  theme(axis.title = element_blank(), 
+        axis.text.x = element_text(angle = 45, hjust = .95, vjust = .95))
+
+
+```
+

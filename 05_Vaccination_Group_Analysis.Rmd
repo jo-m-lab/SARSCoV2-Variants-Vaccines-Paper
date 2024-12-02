@@ -1,0 +1,722 @@
+---
+title: "Vaccination Group Analysis"
+subtitle: "Figure 4, Extended Data Figure 7" 
+output: html_document
+
+---
+#Setup
+
+Data is available for download from the Broad Single Cell Portal: https://singlecell.broadinstitute.org/single_cell/study/SCP2593 
+
+Set working directory to a folder containing the seurat object, participant metadata table (supplementary table 1), gene ontology results (supplementary table 9), and cell subset abundance matrix (supplementary table 6). 
+```{r setup, include=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = "~/Analysis_Files")
+```
+
+Load necessary libraries 
+```{r}
+#Data wrangling 
+library(dplyr)
+library(tidyverse)
+
+#scRNA-seq 
+library(Seurat)
+
+#Plotting 
+library(ggplot2)
+library(cowplot)
+library(EnhancedVolcano)
+library(pheatmap)
+library(gridExtra)
+
+#Statistics
+library(dunn.test)
+library(effsize)
+
+#Proportionality 
+library(propr)
+
+```
+
+Color Palettes
+```{r}
+pal.variants <- c("gray80", "aquamarine4","#9f67a0","lightsalmon2")
+
+pal.variants.vax<- c("gray80", "gray40", "aquamarine4","thistle", "mediumorchid4","#efad66", "#ae5d19")
+
+
+```
+
+Load data
+```{r}
+obj <- readRDS("Variant_Vax_obj.Rds")
+
+meta <- read.csv("Walsh2025_Supplementary_Table1_Pt_Metadata.csv")
+
+```
+
+# Frequency of cell types by vaccination group 
+Create dataframe of frequency of each cell type for each participant.
+```{r}
+pt.celltype.df <- as.data.frame(table(obj$Coarse_Annotation, obj$Participant)) %>% 
+  dplyr::rename(Coarse_Annotation = Var1, Participant = Var2, Number_Cells = Freq) %>%
+  group_by(Participant) %>%
+  mutate(Total_Cells_Participant = sum(Number_Cells)) %>%
+  mutate(Cell_Type_Pct_All = Number_Cells / Total_Cells_Participant * 100) 
+
+#add metadata groups 
+meta$Variant_Vax_Group[meta$Variant_Group == "Control" & meta$Vaccine_Status == "unvaccinated"] <- "Ctrl Unvax"
+meta$Variant_Vax_Group[meta$Variant_Group == "Control" & meta$Vaccine_Status == "vaccinated"] <- "Ctrl Vax"
+
+
+for(pt in unique(pt.celltype.df$Participant)){ 
+  pt.celltype.df$Variant_Vax_Group[pt.celltype.df$Participant == pt] <- meta[meta$Participant == pt, "Variant_Vax_Group"]
+  }
+
+```
+
+Plot frequencies of immune cell types in delta and omicron cases by vaccination status 
+```{r}
+immune_cells <- c("B_Cell", "T_Cell", "Macrophage", "Dendritic")
+
+ggplot(subset(pt.celltype.df, Coarse_Annotation %in% immune_cells & 
+                Variant_Vax_Group %in% c("Delta Unvax", "Delta Vax", "Omicron Unvax", "Omicron Vax")),  
+       aes(x = Variant_Vax_Group, y = Cell_Type_Pct_All, 
+           fill = Variant_Vax_Group, color = Variant_Vax_Group)) + 
+  geom_jitter(height = 0, width = .1) + 
+  scale_color_manual(values = pal.variants.vax[4:7]) + 
+  scale_y_continuous(expand = c(0,0), trans = "log10") + 
+  geom_boxplot(color = "black", alpha = 0.3, width = 0.3, linewidth = .5, outlier.shape = NA) + 
+  scale_fill_manual(values = pal.variants.vax[4:7]) + 
+  ylab("% of All Cells") + 
+  facet_wrap(~Coarse_Annotation, scale = "free", ncol = 4) + 
+  theme_classic() + 
+  theme(legend.position = "none", 
+        axis.title.x = element_blank(), 
+        axis.text.x = element_text(angle = 45, hjust = .9, vjust = .9),
+        strip.text = element_text(face = "bold"),
+        strip.background = element_rect(fill = "white", color = "white"), 
+        panel.spacing = unit(1, unit = "cm"))
+
+```
+
+Plot frequencies of immune cell types in controls by vaccination status 
+```{r}
+ggplot(subset(pt.celltype.df, Coarse_Annotation %in% immune_cells & 
+                Variant_Vax_Group %in% c("Ctrl Unvax", "Ctrl Vax")),
+       
+       aes(x = Variant_Vax_Group, y = Cell_Type_Pct_All, 
+           fill = Variant_Vax_Group, color = Variant_Vax_Group)) + 
+  geom_jitter(height = 0, width = .1) + 
+  scale_color_manual(values = pal.variants.vax[1:2]) + 
+  scale_y_continuous(expand = c(0,0), trans = "log10") + 
+  geom_boxplot(color = "black", alpha = 0.3, width = 0.3, linewidth = .5, outlier.shape = NA) + 
+  scale_fill_manual(values = pal.variants.vax[1:2]) + 
+  ylab("% of All Cells") + 
+  facet_wrap(~Coarse_Annotation, scale = "free", ncol = 4) + 
+  theme_classic() + 
+  theme(legend.position = "none", 
+        strip.text = element_text(size = 14, color = "black", face = "bold"),
+        strip.background = element_rect(fill = "white", color = "white"),
+        axis.title.x = element_blank(), 
+        axis.title.y = element_text(color = "black", face = "bold", size = 13),
+        axis.text = element_text(color = "black", size = 12),
+        panel.spacing = unit(1, unit = "cm"))
+
+```
+
+Plot frequencies of epithelial cell types in controls and delta, omicron cases by vaccination status 
+```{r}
+     
+ggplot(subset(pt.celltype.df, 
+              !(Coarse_Annotation %in% immune_cells) & 
+                Variant_Vax_Group != "Ancestral"),  
+       aes(x = Variant_Vax_Group, y = Cell_Type_Pct_All, 
+           fill = Variant_Vax_Group, color = Variant_Vax_Group)) + 
+  geom_jitter(height = 0, width = .1) + 
+  scale_color_manual(values = c(pal.variants.vax[1:2], pal.variants.vax[4:7])) + 
+  scale_y_continuous(expand = c(0,0), trans = "log10") + 
+  geom_boxplot(color = "black", alpha = 0.3, width = 0.3, linewidth = .5, outlier.shape = NA) + 
+  scale_fill_manual(values = c(pal.variants.vax[1:2], pal.variants.vax[4:7])) + 
+  ylab("% of All Cells") + 
+  facet_wrap(~Coarse_Annotation, scale = "free", ncol = 3) + 
+  theme_classic() + 
+  theme(legend.position = "none", 
+        strip.text = element_text(size = 14, color = "black", face = "bold"),
+        strip.background = element_rect(fill = "white", color = "white"),
+        axis.title.x = element_blank(), 
+        axis.title.y = element_text(color = "black", face = "bold", size = 13),
+        axis.text = element_text(color = "black", size = 12),
+        panel.spacing = unit(1, unit = "cm"))
+
+
+```
+
+Statistics for cell type frequency comparisons across vaccination groups 
+```{r}
+
+for(cluster in unique(pt.celltype.df$Coarse_Annotation)){
+  print(cluster) 
+  pt.df.subset <- subset(pt.celltype.df, Coarse_Annotation == cluster)
+  print(dunn.test(pt.df.subset$Cell_Type_Pct_All, pt.df.subset$Variant_Vax_Group, method = "bh", altp = TRUE))
+}
+
+```
+
+Evaluate correlation between frequency of immune cell types and time from vaccination. 
+
+```{r}
+#initialize column in cell type frequency dataframe
+pt.celltype.df$Days_Vax_Dose_Recent_to_Symptom_Onset <- NA
+
+#add data from metadata table 
+for(pt in unique(pt.celltype.df$Participant)){
+  pt.celltype.df[pt.celltype.df$Participant == pt, "Days_Vax_Dose_Recent_to_Symptom_Onset"] <- 
+    meta[meta$Participant == pt, "Days_Vax_Dose_Recent_to_Symptom_Onset"]
+  
+}
+
+pdf(file = "~/vax_recent_cor_imm.pdf", 
+    width = 12, 
+    height = 3)
+
+#plot spearman correlation 
+ggplot(subset(pt.celltype.df, Coarse_Annotation %in% c("B_Cell", "T_Cell", "Macrophage", "Dendritic") & 
+                Variant_Vax_Group %in% c("Delta Vax", "Omicron Vax")), 
+       aes(x = Days_Vax_Dose_Recent_to_Symptom_Onset, y = Cell_Type_Pct_All, color = Variant_Vax_Group, fill = Variant_Vax_Group)) + 
+  geom_point() + 
+  geom_smooth(method = "lm", span = .75) +
+    stat_cor(method = "spearman", label.x.npc = .1, label.y.npc = "top") +
+  ylab("% of All Cells") + 
+  xlab("Days from Most Recent Vaccine Dose to Symptom Onset") + 
+  scale_color_manual(values = c(pal.variants.vax[5], pal.variants.vax[7])) + 
+  scale_fill_manual(values = c(pal.variants.vax[5], pal.variants.vax[7])) + 
+  facet_wrap(~Coarse_Annotation, scales = "free", ncol = 4) + 
+  theme_classic() + 
+  theme(legend.position = "none",
+        strip.text = element_text(face = "bold", size = 12),
+        strip.background = element_rect(fill = "white", color = "white"), 
+        axis.title = element_text(face = "bold", color = "black", size = 12), 
+        axis.text = element_text(color = "black", size = 10), 
+        panel.spacing = unit(1, unit = "cm"))
+
+dev.off()
+
+```
+
+#Frequency of immune cell subsets by vaccination group 
+
+Define list of patients that have at least 10 immune cells in their samples 
+```{r}
+
+obj@meta.data$Lineage <- ifelse(obj@meta.data$Coarse_Annotation %in% 
+                                  c("B_Cell", "T_Cell", "Macrophage", "Dendritic"), 
+                                "Immune", 
+                                "Epithelial")
+  
+  
+pt.immune.df <- subset(as.data.frame(table(obj$Participant, obj$Lineage)) %>%
+                         rename(Participant = Var1, Lineage = Var2, Number_Immune_Cells = Freq) %>%
+                         mutate(Cohort_Condition = substr(Participant, 1,9)) %>% 
+                         mutate(Cohort_Condition = ifelse(grepl("CONTROL", Cohort_Condition), "CONTROL", Cohort_Condition)), 
+                       Lineage == "Immune" & 
+                       Number_Immune_Cells > 9)
+
+immune.pts.keep <- pt.immune.df$Participant
+
+metadata.imm <- subset(meta, Participant %in% immune.pts.keep) %>%
+  arrange(Participant)
+
+```
+
+Plot frequencies of all detailed  immune cell types as a percent of immune cells 
+```{r}
+pt.df.detailed.imm <- 
+  subset(as.data.frame(table(subset(obj, Lineage == "Immune")$Detailed_Annotation, 
+                                          subset(obj, Lineage == "Immune")$Participant)) %>% 
+    rename(Detailed_Annotation = Var1, Participant = Var2, Number_Cells = Freq) %>%
+    group_by(Participant) %>%
+    mutate(Total_Immune_Cells_Participant = sum(Number_Cells)) %>%
+    mutate(Percent_Cell_Type_of_Immune = Number_Cells / Total_Immune_Cells_Participant * 100) %>% 
+    ungroup() %>%
+    arrange(Detailed_Annotation, Participant), Total_Immune_Cells_Participant > 9) 
+
+
+for(pt in unique(pt.df.detailed.imm$Participant)){ 
+  pt.df.detailed.imm$Variant_Vax_Group[pt.df.detailed.imm$Participant == pt] <- 
+    metadata.imm[metadata.imm$Participant == pt, "Variant_Vax_Group"]
+  }
+
+
+pt.df.detailed.imm$Variant_Vax_Group <- factor(pt.df.detailed.imm$Variant_Vax_Group, 
+                                           levels = c("Ctrl Unvax", "Ctrl Vax", 
+                                                      "Ancestral", 
+                                                      "Delta Unvax", "Delta Vax", 
+                                                      "Omi Unvax", "Omi Vax"))
+
+ggplot(pt.df.detailed.imm,   
+       aes(x = Variant_Vax_Group, y = Percent_Cell_Type_of_Immune, fill = Variant_Vax_Group, color = Variant_Vax_Group)) + 
+  geom_jitter(height = 0, width = .1) + 
+  scale_color_manual(values = pal.variants.vax) + 
+  scale_y_continuous(expand = c(0,0)) + 
+  geom_boxplot(color = "black", alpha = 0.3, width = 0.3, linewidth = .5, outlier.shape = NA) + 
+  scale_fill_manual(values = pal.variants.vax) +
+  ylab("% of Immune Cells") + 
+  facet_wrap(~Detailed_Annotation, scale = "free", ncol = 4) + 
+  theme_classic() + 
+  theme(legend.position = "none", 
+        axis.title.x = element_blank(), 
+        axis.text.x = element_text(angle = 45, hjust = .9, vjust = .9),
+        strip.text = element_text(face = "bold"),
+        strip.background = element_rect(fill = "lightgray"), 
+        panel.spacing = unit(1, unit = "cm"))
+
+
+for(cluster in unique(pt.df.detailed.imm$Detailed_Annotation)){
+  print(cluster) 
+  pt.df.subset <- subset(pt.df.detailed.imm, Detailed_Annotation == cluster)
+  print(dunn.test(pt.df.subset$Percent_Cell_Type_of_Immune, pt.df.subset$Variant_Vax_Group, method = "bh", altp = TRUE))
+}
+
+
+```
+
+#Differential expression analysis 
+## T Cells  
+
+Find DE genes. Results provided in supplementary table 8. 
+```{r}
+delta.tcells <- subset(obj, Variant_Group == "Delta" & Coarse_Annotation == "T_Cell")
+table(delta.tcells$Variant_Vax_Group )
+
+omicron.tcells <- subset(obj, Variant_Group == "Omicron" & Coarse_Annotation == "T_Cell")
+table(omicron.tcells$Variant_Vax_Group )
+#There aren't enough t cells in unvaccinated Omicron to do differential expression - set cutoff at 200 cells 
+
+Idents(delta.tcells) <- delta.tcells$Variant_Vax_Group 
+delta.tcells.de <- subset(FindMarkers(delta.tcells, ident.1 = "Delta Vax", ident.2 = "Delta Unvax"), p_val_adj < 0.001)
+
+```
+
+Volcano plot
+``` {r}
+tcell.genes.to.label <- c(
+  'GNLY',
+'GZMB',
+'HLA-B',
+'NKG7',
+'IFI6',
+'HLA-A',
+'LY6E',
+'NR4A2',
+'BTG1',
+'ZFP36L2',
+'NR4A3',
+'RGS1',
+'ZFP36',
+'TNFAIP3'
+)
+
+#set color of points on volcano plot
+keyvals <- ifelse(
+    delta.tcells.de$avg_log2FC < 0, pal.variants.vax[4],
+      ifelse(delta.tcells.de$avg_log2FC > 0, pal.variants.vax[5],
+        'black'))
+  keyvals[is.na(keyvals)] <- 'black'
+  names(keyvals)[keyvals == pal.variants.vax[4]] <- 'Up in Unvax'
+  names(keyvals)[keyvals == 'black'] <- 'NS'
+  names(keyvals)[keyvals == pal.variants.vax[5]] <- 'Up in Vax'
+
+  
+  
+EnhancedVolcano(delta.tcells.de, 
+                lab = rownames(delta.tcells.de), 
+                selectLab = tcell.genes.to.label,
+                x = "avg_log2FC", 
+                y = "p_val_adj",
+                
+                title = "DE genes in T Cells from Delta Participants",
+                xlab = "Average log2FC",
+                ylab = "-log10(FDR-adjusted p-value)",
+                axisLabSize = 14,
+
+
+                #FCcutoff = 0.75, 
+                cutoffLineType = "blank",
+                xlim = c(-2.5, 2.5),
+                ylim = c(0,60),
+                colCustom = keyvals,
+                colAlpha = 1,
+                legendPosition = "right",
+
+                labSize = 3,
+                drawConnectors = TRUE,
+                arrowheads = FALSE,
+                max.overlaps = 1000,
+
+                gridlines.major = FALSE,
+                gridlines.minor = FALSE
+                
+                ) + 
+  theme(plot.title = element_text(hjust = 0.5), 
+        plot.subtitle = element_blank(), 
+        plot.caption = element_blank(),
+        axis.text = element_text(size = 10, color = "black"), 
+        axis.title = element_text(face = "bold"))
+
+```
+
+## Macrophages 
+Find DE genes. Results provided in supplementary table 8. 
+```{r}
+control.macs <- subset(obj, Variant_Group == "Control" & Coarse_Annotation == "Macrophage")
+table(control.macs$Variant_Vax_Group)
+#There aren't enough macrophages in control participants to do differential expression 
+
+delta.macs <- subset(obj, Variant_Group == "Delta" & Coarse_Annotation == "Macrophage")
+table(delta.macs$Variant_Vax_Group )
+
+omicron.macs <- subset(obj, Variant_Group == "Omicron" & Coarse_Annotation == "Macrophage")
+table(omicron.macs$Variant_Vax_Group )
+#There aren't enough macrophages in unvaccinated Omicron to do differential expression 
+
+Idents(delta.macs) <- delta.macs$Variant_Vax_Group 
+
+delta.mac.de <- subset(FindMarkers(delta.macs, ident.1 = "Delta Vax", ident.2 = "Delta Unvax"), p_val_adj < 0.001)
+```
+
+Volcano plot 
+``` {r}
+mac.genes.to.label <- c(
+'LGMN',
+'LMNA',
+'HSPA5',
+'DUSP2',
+'HSPA6',
+'TNF',
+'LCP1',
+'CD83',
+'GADD45B',
+'BAG3',
+'IER3',
+'HLA-DRA',
+'LGALS1',
+'CFL1',
+'LIPA',
+'RNASE1',
+'H2AFY',
+'JAKMIP2',
+'CD36',
+'IGSF6',
+'TGFBI',
+'CD84',
+'CD74',
+'IFI27',
+'NFKBIZ',
+'TYROBP',
+'HLA-DRB5',
+'HLA-DRB1',
+'LAMP1',
+'HLA-DQB1',
+
+
+'MTRNR2L1',
+'NEAT1',
+'VCAN',
+'CXCL11',
+'MALAT1',
+'TNFSF10',
+'SAT1',
+'IFIT1'
+)
+
+#set colors of points in volcano plot 
+keyvals <- ifelse(
+    delta.mac.de$avg_log2FC < -0, pal.variants.vax[4],
+      ifelse(delta.mac.de$avg_log2FC > 0, pal.variants.vax[5],
+        'black'))
+keyvals[is.na(keyvals)] <- 'black'
+names(keyvals)[keyvals == pal.variants.vax[4]] <- 'Up in Unvax'
+names(keyvals)[keyvals == 'black'] <- 'NS'
+names(keyvals)[keyvals == pal.variants.vax[5]] <- 'Up in Vax'
+
+  
+  
+EnhancedVolcano(delta.mac.de, 
+                lab = rownames(delta.mac.de), 
+                selectLab = genes.to.label,
+                x = "avg_log2FC", 
+                y = "p_val_adj",
+                
+                title = "DE genes in Macrophages from Delta Participants",
+                xlab = "Average log2FC",
+                ylab = "-log10(FDR-adjusted p-value)",
+                axisLabSize = 14,
+
+
+                #FCcutoff = 0.75, 
+                cutoffLineType = "blank",
+                xlim = c(-2.5, 2.5),
+                colCustom = keyvals,
+                colAlpha = 1,
+                legendPosition = "right",
+
+                labSize = 3,
+                drawConnectors = TRUE,
+                arrowheads = FALSE,
+                max.overlaps = 1000,
+
+                gridlines.major = FALSE,
+                gridlines.minor = FALSE
+                
+                ) + 
+  theme(plot.title = element_text(hjust = 0.5), 
+        plot.subtitle = element_blank(), 
+        plot.caption = element_blank(),
+        axis.text = element_text(size = 10, color = "black"), 
+        axis.title = element_text(face = "bold"))
+
+
+
+```
+
+Gene ontology analysis 
+Data necessary for this plot is provided in supplementary table 9. 
+``` {r}
+mac.go.df <- read.csv("Walsh2025_Supplementary_Table9_GO_Delta_Vax_Mac.csv")
+
+#sort by adjusted p value 
+mac.go.df <- mac.go.df %>% 
+  arrange(Benjamini)
+
+#select top 20 GO terms 
+mac.go.df.subset <- mac.go.df[1:18,]
+mac.go.df.subset$Term <- factor(mac.go.df.subset$Term, levels = rev(mac.go.df.subset$Term))
+
+ggplot(mac.go.df.subset %>% arrange(Benjamini), aes(x = Benjamini, y = Term, size = Count)) + 
+  geom_point(color = pal.variants.vax[5]) + 
+  scale_x_continuous(trans = "log10") + 
+  scale_y_discrete(labels = function(x) str_wrap(x, width = 45)) + 
+  labs( x = "FDR-adjusted p value") + 
+  theme_classic() + 
+  theme(axis.text = element_text(size = 12, color = "black"), 
+        axis.title.x = element_text(size = 14, color = "black", face = "bold"), axis.title.y = element_blank(), 
+        #plot.title = element_text(size = 18, color = "black", face = "bold"), 
+        legend.title = element_text(size = 12, color = "black"), 
+        legend.text = element_text(size = 12, color = "black"))
+
+```
+
+
+#Proportionality analysis 
+
+Set order of detailed clusters 
+```{r}
+detailed.annotation.order <- c(
+"Basal.KRT5.DST.KRT15",
+"Basal.MKI67.TOP2A.CENPF",
+
+"Secretory.ATF3.GDF15.EGR1",
+"Secretory.BPIFA1.BPIFB1",
+"Secretory.SCGB1A1", 
+"Secretory.CXCL8.CXCL1.CXCL2",
+"Secretory.KRT4",
+"Secretory.KRT24", 
+"Secretory.S100A9.PI3.CEACAM5",
+
+"Secretory.NEAT1.ANKRD36C.PNISR", 
+"Secretory.NFKBIA.TNFAIP3",
+"Secretory.SARSCoV2",
+
+"Goblet.MUC5AC",
+
+"Squamous.ALDH3A1.PIGR.VMO1",
+"Squamous.SPRR2E.SPRR2D.KRT78",
+"Squamous.CXCL8" ,
+"Squamous.S100A2.APOBEC3A.SFN",
+"Squamous.MT",
+
+
+"Ionocytes", 
+
+"Deuterosomal",  
+
+"Ciliated",
+"Ciliated.ALDH3A1.CYP4B1.SEC14L3", 
+"Ciliated.BEST4.CYB5A.ENPP5" ,
+"Ciliated.PIFO.CD24.COX6A1", 
+"Ciliated.DNAAF1.DNAH12", 
+"Ciliated.SYNE1.DNAH11.CFAP44",
+"Ciliated.HLA.CD74",
+"Ciliated.IFITM3.IFI6.STAT1",
+"Ciliated.ISG15.IFIT1.IFIT2" ,
+"Ciliated.SAA1.SAA2.KRT7" ,
+"Ciliated.JUN.FOS.DNAJB1", 
+"Ciliated.MT",
+"Ciliated.SERPINB3.VMO1.AQP5",   
+
+"MT.high.CAPS.DNAH5.SYNE1", 
+"MT.high.S100A9.S100A8.SPRR3", 
+"MT.high.HBB.HBA2" ,
+"MT.high.DNAJB1.HSPH1.KLF6",
+"MT.high.NEAT1.JUN.FOS",
+"MT.high",
+
+"SARSCoV2.high.SPRR3.IFNA1.S100A8",
+"SARSCoV2.high.PER2.EGR1.GDF15", 
+"SARSCoV2.high.B2M.NUPR1.IFI27",  
+"SARSCoV2.high.MT",
+"SARSCoV2.high", 
+
+"T_Cell.RPL4.RPS18" ,
+  "T_Cell.HSPA6.DEDD2.NEU1", 
+  "T_Cell.SYNE2.MACF1.NKTR" ,
+  "T_Cell.CXCR4.YPEL5.NR4A3" ,
+  "T_Cell.GNLY.GZMB.MX1"  ,
+  
+  "B_Cell.MS4A1.IGKC.CD79A", 
+  
+  "Dendritic.HLA.CCR7" ,
+  
+  
+  "Macrophage.NEAT1.HEXIM1.ZEB2" ,
+  "Macrophage.CTSD.CTSL.CD68"  ,
+  "Macrophage.CCL3.CCL4.CCRL2" ,
+  "Macrophage.CXCL5.CXCL1.SERPINB2",
+  "Macrophage.S100A8.S100A9.LYZ" ,
+  "Macrophage.CXCL10.CXCL11.IFIT1" 
+                                      
+)  
+
+
+
+```
+
+Load abundance matrix. This file is available as Supplementary Table 6. 
+To see how this abundance matrix was generated, see compositional analysis section of the notebook titled "02_Compositional_Cell_Subset_Analysis".
+```{r}
+abundance.mtx <- read.csv("Walsh2025_Supplementary_Table6_Abundance_Matrix.csv", row.names = 1)
+
+label.metadata <- abundance.mtx[, 1:3]
+
+abundance.mtx <- abundance.mtx[,4:60]
+
+```
+
+Calculate proportionality separately for unvaccinated and vaccinated samples. 
+```{r}
+#UNVAX 
+abundance.mtx.unvax <- abundance.mtx[label.metadata$Variant_Vax_Group%in% c("Delta Unvax", "Omicron Unvax"), ]
+
+#need this to get the same results the next time propr is run 
+set.seed(15)
+
+#run propr function 
+rho.unvax <- propr(abundance.mtx.unvax, metric = "rho", p = 100)
+
+#determinate false discovery rate for proportionality cutoffs
+rho.unvax <- updateCutoffs(rho.unvax, cutoff = seq(.25, .95, .05))
+rho.unvax@fdr
+
+#determine FDR for a smaller ranger of proportionality cutoffs
+rho.unvax <- updateCutoffs(rho.unvax, cutoff = seq(.55, .6, .005))
+rho.unvax@fdr
+
+#fdr is <0.05 at a cutoff of 0.57
+rho.unvax.fdr.05 <- rho.unvax[">", .57]
+
+#extract indices of pairs with rho above FDR cutoff 
+rho.unvax.pairs = arrayInd(rho.unvax.fdr.05@pairs, .dim = dim(rho.unvax@matrix))
+
+#create dataframe of each pair and rho metric 
+rho.unvax.pairs.df = data.frame(clust1 = rownames(rho.unvax@matrix)[rho.unvax.pairs[,1]],
+                             clust2 = colnames(rho.unvax@matrix)[rho.unvax.pairs[,2]],
+                             rho = rho.unvax@matrix[rho.unvax.fdr.05@pairs])
+
+#extract matrix 
+mtx.unvax <- rho.unvax@matrix
+
+#order matrix based on defined order
+ordered.mtx.unvax <- mtx.unvax[detailed.annotation.order, detailed.annotation.order]
+
+p1 <- pheatmap(ordered.mtx.unvax,cluster_rows = F, cluster_cols = F)
+
+#subset to only immune cells 
+ordered.mtx.immune.unvax <- mtx.unvax[c("SARSCoV2.high.MT", "SARSCoV2.high.PER2.EGR1.GDF15", detailed.annotation.order[45:57]),
+                                      c("SARSCoV2.high.MT", "SARSCoV2.high.PER2.EGR1.GDF15", detailed.annotation.order[45:57])]
+
+
+ordered.mtx.immune.unvax <- mtx.unvax[c("SARSCoV2.high.MT", "SARSCoV2.high.PER2.EGR1.GDF15", "T_Cell.GNLY.GZMB.MX1", "T_Cell.RPL4.RPS18", 
+                                    detailed.annotation.order[46:48], detailed.annotation.order[50:57]), 
+                          c("SARSCoV2.high.MT", "SARSCoV2.high.PER2.EGR1.GDF15", "T_Cell.GNLY.GZMB.MX1", "T_Cell.RPL4.RPS18", 
+                                    detailed.annotation.order[46:48], detailed.annotation.order[50:57])] 
+
+p3 <- pheatmap(ordered.mtx.immune.unvax,cluster_rows = F, cluster_cols = F, breaks = seq(-.5, 1, .015), 
+               color = colorRampPalette(rev(brewer.pal(n = 9, name = "RdBu")), bias = 1.5)(100), 
+               fontsize = 12)
+
+
+
+#VAX 
+abundance.mtx.vax <- abundance.mtx[label.metadata$Variant_Vax_Group%in% c("Delta Vax", "Omicron Vax"), ]
+
+set.seed(16)
+#run propr function 
+rho.vax <- propr(abundance.mtx.vax, metric = "rho", p = 100)
+
+#determinate false discovery rate for proportionality cutoffs 
+rho.vax <- updateCutoffs(rho.vax, cutoff = seq(.25, .95, .05))
+rho.vax@fdr
+
+#determine FDR for a smaller ranger of proportionality cutoffs 
+rho.vax <- updateCutoffs(rho.vax, cutoff = seq(.55, .6, .005))
+rho.vax@fdr
+
+#fdr is <0.05 at a cutoff of 0.59
+rho.vax.fdr.05 <- rho.vax[">", .595]
+
+rho.vax.pairs = arrayInd(rho.vax.fdr.05@pairs, .dim = dim(rho.vax@matrix))
+rho.vax.pairs.df = data.frame(clust1 = rownames(rho.vax@matrix)[rho.vax.pairs[,1]],
+                             clust2 = colnames(rho.vax@matrix)[rho.vax.pairs[,2]],
+                             rho = rho.vax@matrix[rho.vax.fdr.05@pairs])
+
+
+mtx.vax <- rho.vax@matrix
+
+ordered.mtx.vax <- mtx.vax[detailed.annotation.order, detailed.annotation.order]
+
+p2 <- pheatmap(ordered.mtx.vax,cluster_rows = F, cluster_cols = F)
+
+
+plot_list=list()
+plot_list[['p1']]=p1[[4]]
+plot_list[['p2']]=p2[[4]]
+
+grid.arrange(grobs=plot_list, ncol=2)
+
+
+
+ordered.mtx.immune.vax <- mtx.vax[c("SARSCoV2.high.MT", "SARSCoV2.high.PER2.EGR1.GDF15", "T_Cell.GNLY.GZMB.MX1", "T_Cell.RPL4.RPS18", 
+                                    detailed.annotation.order[46:48], detailed.annotation.order[50:57]), 
+                          c("SARSCoV2.high.MT", "SARSCoV2.high.PER2.EGR1.GDF15", "T_Cell.GNLY.GZMB.MX1", "T_Cell.RPL4.RPS18", 
+                                    detailed.annotation.order[46:48], detailed.annotation.order[50:57])] 
+
+p4 <- pheatmap(ordered.mtx.immune.vax,cluster_rows = F, cluster_cols = F, breaks = seq(-.5, 1, .015), 
+               color = colorRampPalette(rev(brewer.pal(n = 9, name = "RdBu")), bias = 1.5)(100), 
+               fontsize = 12)
+
+plot_list_immune=list()
+plot_list_immune[['p3']]=p3[[4]]
+plot_list_immune[['p4']]=p4[[4]]
+
+
+grid.arrange(arrangeGrob(plot_list_immune$p3, top = 'Unvaccinated'), 
+             arrangeGrob(plot_list_immune$p4, top = "Vaccinated"), 
+             ncol=2)
+
+
+```
+
+
+

@@ -1,0 +1,843 @@
+---
+title: "COVID-19 Severity Correlates Analysis"
+subtitle: "Figure 5, Extended Figures 8-9"
+output: html_document
+---
+
+#Setup
+
+Data is available for download from the Broad Single Cell Portal: https://singlecell.broadinstitute.org/single_cell/study/SCP2593 
+
+Set working directory to a folder containing the seurat object, participant metadata table (supplementary table 1), and IFN stim gene lists (supplementary table 10). 
+```{r setup, include=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = "~/Analysis_Files")
+```
+
+Load necessary libraries 
+```{r}
+#Data wrangling 
+library(dplyr)
+library(tidyverse)
+library(caret)
+
+#scRNA-seq 
+library(Seurat)
+
+#Plotting 
+library(ggplot2)
+library(RColorBrewer)
+library(cowplot)
+library(pheatmap)
+
+#pseudobulk analysis
+library(DESeq2)
+
+```
+
+Color Palettes
+```{r}
+pal.variants <- c("gray80", "aquamarine4","#9f67a0","lightsalmon2")
+
+```
+
+Load data
+```{r}
+obj <- readRDS("Variant_Vax_obj.Rds")
+
+metadata <- read.csv("Walsh2025_Supplementary_Table1_Pt_Metadata.csv")
+
+```
+
+
+#IFN gene module scores 
+
+Gene lists necessary for these plots can be found in supplementary table 10. 
+
+Add module scores 
+```{r}
+#read in gene lists 
+cytokine_lists <- read.csv(file = "Walsh2025_Supplementary_Table10_Nasal_ISG.csv")
+
+#create lists of genes that were upregulated in multiple donors 
+ifna.genes <- list(intersect(cytokine_lists$IFNA_Donor1, cytokine_lists$IFNA_Donor2))
+ifng.genes <- list(intersect(cytokine_lists$IFNG_Donor1, cytokine_lists$IFNG_Donor2))
+
+#add module scores to seurat object 
+obj <- AddModuleScore(obj, features = ifna.genes, name = "IFN_alpha")
+obj <- AddModuleScore(obj, features = ifng.genes, name = "IFN_gamma")
+
+```
+
+Ciliated 
+```{r}
+#subset ciliated cells from covid cases 
+obj.cil <- subset(obj, Coarse_Annotation == "Ciliated" & Variant_Group != "Control")
+
+#plot IFN-alpha response score 
+ggplot(data = obj.cil@meta.data, aes(x = factor(WHO_Score_at_Peak), y = IFN_alpha1, fill = Variant_Group)) + 
+  geom_jitter(height = 0, width = 0.2, size = .2) + 
+  geom_violin(aes(x = factor(WHO_Score_at_Peak), y = IFN_alpha1), alpha = 0.3) + 
+  geom_smooth(aes(x = WHO_Score_at_Peak, y = IFN_alpha1, color = Variant_Group), method = "loess", alpha = 0.3) + 
+  scale_color_manual(values = pal.variants[2:4]) + 
+  scale_fill_manual(values = pal.variants[2:4]) + 
+  xlab("Peak WHO Respiratory Support Score") + 
+  ylab("IFNa Response Module Score") + 
+  ylim(0, 0.5) + 
+  facet_wrap(~Variant_Group, scales = "free") + 
+  ggtitle("Ciliated Cells") + 
+  theme_classic() + 
+  theme(plot.title = element_text(size = 14, color = "black", face = "bold", hjust = 0.5), 
+        axis.title = element_text(size = 12, color = "black", face = "bold"), 
+        axis.text = element_text(size = 10, color = "black"), 
+        legend.position = "none", 
+        strip.background = element_rect(fill = "lightgray"), 
+        strip.text = element_text(size = 12, color = "black", face = "bold")) 
+
+
+#plot IFN-gamma response score 
+ggplot(data = obj.cil@meta.data, aes(x = factor(WHO_Score_at_Peak), y = IFN_gamma1, fill = Variant_Group)) + 
+  geom_jitter(height = 0, width = 0.2, size = .2) + 
+  geom_violin(aes(x = factor(WHO_Score_at_Peak), y = IFN_gamma1), alpha = 0.3) + 
+  geom_smooth(aes(x = WHO_Score_at_Peak, y = IFN_gamma1, color = Variant_Group), method = "loess", alpha = 0.3) + 
+  scale_color_manual(values = pal.variants[2:4]) + 
+  scale_fill_manual(values = pal.variants[2:4]) + 
+  xlab("Peak WHO Respiratory Support Score") + 
+  ylab("IFNg Response Module Score") + 
+  ylim(0, 0.5) + 
+  facet_wrap(~Variant_Group, scales = "free") + 
+  ggtitle("Ciliated Cells") + 
+  theme_classic() + 
+  theme(plot.title = element_text(size = 14, color = "black", face = "bold", hjust = 0.5), 
+        axis.title = element_text(size = 12, color = "black", face = "bold"), 
+        axis.text = element_text(size = 10, color = "black"), 
+        legend.position = "none", 
+        strip.background = element_rect(fill = "lightgray"), 
+        strip.text = element_text(size = 12, color = "black", face = "bold")) 
+
+
+```
+
+Secretory
+```{r}
+#subset secretory cells from covid patients 
+obj.sec <- subset(obj, Coarse_Annotation == "Secretory" & Variant_Group != "Control")
+
+#plot IFN-alpha response score 
+ggplot(data = obj.sec@meta.data, aes(x = factor(WHO_Score_at_Peak), y = IFN_alpha1, fill = Variant_Group)) + 
+  geom_jitter(height = 0, width = 0.2, size = .2) + 
+  geom_violin(aes(x = factor(WHO_Score_at_Peak), y = IFN_alpha1), alpha = 0.3) + 
+  geom_smooth(aes(x = WHO_Score_at_Peak, y = IFN_alpha1, color = Variant_Group), method = "loess", alpha = 0.3) + 
+  scale_color_manual(values = pal.variants[2:4]) + 
+  scale_fill_manual(values = pal.variants[2:4]) + 
+  xlab("Peak WHO Respiratory Support Score") + 
+  ylab("IFNa Response Module Score") + 
+  ylim(0, 0.5) + 
+  facet_wrap(~Variant_Group, scales = "free") + 
+  ggtitle("Secretory Cells") + 
+  theme_classic() + 
+  theme(plot.title = element_text(size = 14, color = "black", face = "bold", hjust = 0.5), 
+        axis.title = element_text(size = 12, color = "black", face = "bold"), 
+        axis.text = element_text(size = 10, color = "black"), 
+        legend.position = "none", 
+        strip.background = element_rect(fill = "lightgray"), 
+        strip.text = element_text(size = 12, color = "black", face = "bold")) 
+
+
+#plot IFN-gamma response score 
+ggplot(data = obj.sec@meta.data, aes(x = factor(WHO_Score_at_Peak), y = IFN_gamma1, fill = Variant_Group)) + 
+  geom_jitter(height = 0, width = 0.2, size = .2) + 
+  geom_violin(aes(x = factor(WHO_Score_at_Peak), y = IFN_gamma1), alpha = 0.3) + 
+  geom_smooth(aes(x = WHO_Score_at_Peak, y = IFN_gamma1, color = Variant_Group), method = "loess", alpha = 0.3) + 
+  scale_color_manual(values = pal.variants[2:4]) + 
+  scale_fill_manual(values = pal.variants[2:4]) + 
+  xlab("Peak WHO Respiratory Support Score") + 
+  ylab("IFNg Response Module Score") + 
+  ylim(0, 0.5) + 
+  facet_wrap(~Variant_Group, scales = "free") + 
+  ggtitle("Secretory Cells") + 
+  theme_classic() + 
+  theme(plot.title = element_text(size = 14, color = "black", face = "bold", hjust = 0.5), 
+        axis.title = element_text(size = 12, color = "black", face = "bold"), 
+        axis.text = element_text(size = 10, color = "black"), 
+        legend.position = "none", 
+        strip.background = element_rect(fill = "lightgray"), 
+        strip.text = element_text(size = 12, color = "black", face = "bold")) 
+
+
+```
+
+T Cells
+```{r}
+#subset T cells from covid patients 
+obj.t <- subset(obj, Coarse_Annotation == "T_Cell" & Variant_Group != "Control")
+
+#plot IFN-alpha response score 
+ggplot(data = obj.t@meta.data, aes(x = factor(WHO_Score_at_Peak), y = IFN_alpha1, fill = Variant_Group)) + 
+  geom_jitter(height = 0, width = 0.2, size = .2) + 
+  geom_violin(aes(x = factor(WHO_Score_at_Peak), y = IFN_alpha1), alpha = 0.3) + 
+  geom_smooth(aes(x = WHO_Score_at_Peak, y = IFN_alpha1, color = Variant_Group), method = "loess", alpha = 0.3) + 
+  scale_color_manual(values = pal.variants[2:4]) + 
+  scale_fill_manual(values = pal.variants[2:4]) + 
+  xlab("Peak WHO Respiratory Support Score") + 
+  ylab("IFNa Response Module Score") + 
+  ylim(0, 0.5) + 
+  facet_wrap(~Variant_Group, scales = "free") + 
+  ggtitle("T Cells") + 
+  theme_classic() + 
+  theme(plot.title = element_text(size = 14, color = "black", face = "bold", hjust = 0.5), 
+        axis.title = element_text(size = 12, color = "black", face = "bold"), 
+        axis.text = element_text(size = 10, color = "black"), 
+        legend.position = "none", 
+        strip.background = element_rect(fill = "lightgray"), 
+        strip.text = element_text(size = 12, color = "black", face = "bold")) 
+
+
+#plot IFN-gamma response score 
+ggplot(data = obj.t@meta.data, aes(x = factor(WHO_Score_at_Peak), y = IFN_gamma1, fill = Variant_Group)) + 
+  geom_jitter(height = 0, width = 0.2, size = .2) + 
+  geom_violin(aes(x = factor(WHO_Score_at_Peak), y = IFN_gamma1), alpha = 0.3) + 
+  geom_smooth(aes(x = WHO_Score_at_Peak, y = IFN_gamma1, color = Variant_Group), method = "loess", alpha = 0.3) + 
+  scale_color_manual(values = pal.variants[2:4]) + 
+  scale_fill_manual(values = pal.variants[2:4]) + 
+  xlab("Peak WHO Respiratory Support Score") + 
+  ylab("IFNg Response Module Score") + 
+  ylim(0, 0.5) + 
+  facet_wrap(~Variant_Group, scales = "free") + 
+  ggtitle("T Cells") + 
+  theme_classic() + 
+  theme(plot.title = element_text(size = 14, color = "black", face = "bold", hjust = 0.5), 
+        axis.title = element_text(size = 12, color = "black", face = "bold"), 
+        axis.text = element_text(size = 10, color = "black"), 
+        legend.position = "none", 
+        strip.background = element_rect(fill = "lightgray"), 
+        strip.text = element_text(size = 12, color = "black", face = "bold")) 
+
+
+```
+
+
+
+#Ciliated pseudobulk analysis 
+
+Create pseudobulk count matrix 
+```{r}
+
+#aggregate expression for each participant + cell type 
+aggr <- AggregateExpression(obj, group.by = c("Coarse_Annotation", "Participant"), slot = "counts")
+counts <- as.data.frame(aggr$RNA)
+
+#create dataframe with number of cells for each participant + cell type 
+celltype.numbers.by.pt <- as.data.frame(table(obj$Participant, obj$Coarse_Annotation)) %>%
+  dplyr::rename(Participant = Var1, Coarse_Annotation = Var2, Number_Cells = Freq)
+
+#set up deseq metadata
+#restrict to combinations of participant + cell type with at least 1 cell 
+deseq.metadata <- celltype.numbers.by.pt[celltype.numbers.by.pt$Number_Cells > 0, ]
+#add combo as a column - make sure this matches column names of counts 
+deseq.metadata$Pt_Celltype <- paste(deseq.metadata$Coarse_Annotation, deseq.metadata$Participant,  sep = "_")
+#rearrange so pt + cell type is in the first column 
+deseq.metadata <- deseq.metadata[, c(4, 1:3)]
+
+
+#add variant group and WHO peak 
+deseq.metadata$Variant_Group <- NA 
+deseq.metadata$WHO_Score_at_Peak <- NA
+
+for(pt in unique(deseq.metadata$Participant)){ 
+   
+  deseq.metadata[deseq.metadata$Participant == pt, "Variant_Group"] <- 
+     meta[meta$Participant == pt, "Variant_Group"]
+  
+  deseq.metadata[deseq.metadata$Participant == pt, "WHO_Score_at_Peak"] <- 
+     meta[meta$Participant == pt, "WHO_Score_at_Peak"]
+  }
+
+
+
+#check column names 
+all.equal(deseq.metadata$Pt_Celltype, colnames(counts))
+
+
+#subset to cell types of interest - start with ciliated 
+deseq.metadata.subset <- subset(deseq.metadata, Coarse_Annotation %in% c("Ciliated", "Secretory", "T_Cell") & Number_Cells > 10)
+
+#metadata needs to be factored for DESEq2
+deseq.metadata.subset$Participant <- factor(deseq.metadata.subset$Participant, levels = unique(deseq.metadata.subset$Participant))
+deseq.metadata.subset$Coarse_Annotation <- factor(deseq.metadata.subset$Coarse_Annotation, levels = unique(deseq.metadata.subset$Coarse_Annotation))
+deseq.metadata.subset$WHO_Score_at_Peak <- factor(deseq.metadata.subset$WHO_Score_at_Peak, levels = c(0,1,2,3,4,5,6,7,8))
+deseq.metadata.subset$Variant_Group <- factor(deseq.metadata.subset$Variant_Group, levels = c("Control", "Ancestral", "Delta", "Omicron"))
+
+#identify genes with at least 10 counts in at least 3 cells
+genes.keep = rownames(counts)[rowSums(counts >= 10) >= 3]
+
+#subset counts matrix to select genes and samples 
+counts.subset <- counts[genes.keep, deseq.metadata.subset$Pt_Celltype]
+
+#create DESeq2 object 
+DDS.pt.celltype = DESeqDataSetFromMatrix(countData = counts.subset, colData = deseq.metadata.subset,
+                                         design = ~WHO_Score_at_Peak + Variant_Group) 
+DDS.pt.celltype = DESeq(DDS.pt.celltype)
+
+#normalize counts 
+norm.mat = log2(counts(DDS.pt.celltype, normalized = TRUE, )+1)
+
+```
+
+Plot correlation of select IFN-stimulated genes with severity score (WHO 0-8)
+```{r}
+
+#create dataframe with participant metadata and pseudobulk counts of select genes 
+isg.df <- deseq.metadata.subset
+
+isgs.to.plot <- c("IFITM3", "MX1", "STAT1", "STAT2", "IFI6","ISG15", "IFIT1", "IRF1", "IRF9", "CXCL9", "CXCL10")
+
+for(gene in isgs.to.plot){
+  isg.df[,gene] <- norm.mat[gene,]
+}
+
+
+#go through each gene and plot the correlation between severity score and normalized pseudobulk counts in ciliated cells, separated by variant. 
+cil.isg.plots <- list()
+
+for(gene in isgs.to.plot){
+
+plot <- ggplot(subset(isg.df, Variant_Group != "Control" & Coarse_Annotation == "Ciliated"), 
+       aes(x = as.numeric(WHO_Score_at_Peak) -1,
+           y = .data[[gene]], 
+           color = Variant_Group, fill = Variant_Group)) + 
+  geom_point() + 
+  geom_smooth(method = "lm", span = .75) + 
+  stat_cor(method = "spearman", label.x = 1, label.y = 10) + 
+  scale_color_manual(values = pal.variants[2:4]) +
+  scale_fill_manual(values = pal.variants[2:4]) + 
+  scale_x_continuous(breaks = c(0,1,2,3,4,5,6,7,8)) + 
+  xlab("COVID-19 Severity Score (WHO)") + 
+  #scale_y_continuous(limits = c(-2,10)) + 
+  facet_wrap(~Variant_Group, ncol = 3) +
+  theme_classic() + 
+  theme(legend.position = "none")
+
+cil.isg.plots[[gene]] <- plot
+
+
+}
+
+
+plot_grid(plotlist = cil.isg.plots, ncol = 1)
+
+```
+
+
+#Cell type and metadata correlations 
+
+Define metadata columns we want to evaluate 
+```{r}
+#colnames(metadata)
+
+#list of metadata variables to evaluate 
+metadata.vars <- c(
+  #main participant groups 
+  "Variant_Group", 
+  "Vaccine_Status", 
+  
+  #vaccine info
+  "Vaccine_Type", 
+  "Num_Vaccine_Doses",
+  
+  #demographics 
+  "Age", 
+  "Sex", 
+  "Race.Ethnicity",
+  
+  #timing
+  "Days_Symptom_Onset_to_Hospital_Presentation",
+  "Days_Symptom_Onset_to_Sample_Collection", 
+  "Days_Pos_COVID_Test_to_Sample_Collection",
+  
+  #pre-existing health conditions / drugs
+  "BMI", 
+  "Smoking", 
+  "Diabetes", 
+  "CKD", 
+  "CHF", 
+  "Heart_Disease", 
+  "Lung_Disease", 
+  "Pancreatitis",   
+  "HTN", 
+  "IBD", 
+  "Autoimmune_Disease", 
+  "Immunosuppression", 
+  "PPI",
+  
+  #COVID-19 disease course / treatment
+  "Days_Hospital_Stay", 
+  "Days_ICU_Stay", 
+  "WHO_Score_at_Swab", 
+  "WHO_Score_at_Peak", 
+  "Days_Symptom_Onset_to_Peak_WHO_Score", 
+  "Symptomatic",
+  "Admitted",
+  "Discharged", 
+  "Deceased", 
+  
+  #clinical presentation 
+  "CP_Diarrhea",
+  "CP_Nausea", 
+  "CP_Vomiting", 
+  "CP_Pulmonary", 
+  
+  #treatment
+  "Vasopressors",
+  "Highest_Oxygen", 
+  "Steroids", 
+  "Remdesivir",
+  "Antibiotics", 
+  
+  #clinical labs
+  "EGFR",
+  "BUN",
+  "sCr", 
+  "INR",
+  "ALT",
+  "AST", 
+  "D_Dimer",
+  "Procalcitonin",
+  "Ferritin",
+  "LDH",
+  "proBNP",
+  "WBC",
+  "Platelets",
+  "Hgb",
+  "Hct",
+  "Neutrophils",
+  "Hgb_A1c", 
+  "Acute_Liver_Failure",
+  "Elevated_Transaminases" , 
+  
+  #antibody levels 
+  "IgG_RBD_W", 
+  "IgM_RBD_W", 
+  "IgG_RBD_D", 
+  "IgG_NP" 
+  
+)
+
+setdiff(colnames(metadata), metadata.vars)
+
+```
+
+Re-code values where necessary: 
+```{r}
+meta <- metadata[, c("Participant", metadata.vars)] %>%
+  column_to_rownames("Participant") 
+
+#Vaccine Type 
+meta$Vaccine_Type[meta$Vaccine_Type %in% c("0", "N/A")] <- NA
+meta$Vaccine_Type[meta$Vaccine_Type %in% c("J&J", "unknown")]  <- "Other"
+meta$Vaccine_Type[meta$Vaccine_Type %in% c("Pfizer + J&J", "Pfizer")] <- "Pfizer"
+unique(meta$Vaccine_Type)
+table(meta$Vaccine_Type)
+
+#Vaccine Doses 
+meta$Num_Vaccine_Doses[meta$Num_Vaccine_Doses %in% c("", "N/A")] <- NA
+unique(meta$Num_Vaccine_Doses)
+meta$Num_Vaccine_Doses <- as.numeric(meta$Num_Vaccine_Doses)
+unique(meta$Num_Vaccine_Doses)
+
+#Sex 
+meta$Sex[meta$Sex == "M "] <- "M"
+unique(meta$Sex)
+
+#Race 
+table(meta$Race.Ethnicity)
+meta$Race.Ethnicity[meta$Race.Ethnicity == "Black "] <- "Black"
+meta$Race.Ethnicity[meta$Race.Ethnicity == "White, Hispanic"] <- "White_Hispanic"
+meta$Race.Ethnicity[meta$Race.Ethnicity == "White, non Hispanic"] <- "White_non_Hispanic"
+table(meta$Race.Ethnicity)
+
+#Smoking
+table(meta$Smoking)
+
+#Heart Disease 
+meta$Heart_Disease[meta$Heart_Disease == "1 - valvular"] <- 1
+table(meta$Heart_Disease)
+meta$Heart_Disease <- as.numeric(meta$Heart_Disease)
+
+#Vasopressors 
+table(meta$Vasopressors)
+meta$Vasopressors[meta$Vasopressors == 4] <- 1
+
+
+#D Dimer 
+table(meta$D_Dimer)
+meta$D_Dimer[meta$D_Dimer %in% c("<215", "0")] <- 215
+meta$D_Dimer <- gsub(",", "", meta$D_Dimer)
+meta$D_Dimer[meta$D_Dimer == ""] <- NA
+table(meta$D_Dimer)
+meta$D_Dimer <- as.numeric(meta$D_Dimer)
+
+#Ferritin 
+table(meta$Ferritin)
+meta$Ferritin <- gsub(",", "", meta$Ferritin)
+meta$Ferritin[meta$Ferritin == ""] <- NA
+meta$Ferritin <- as.numeric(meta$Ferritin)
+
+
+#LDH 
+meta$LDH <- gsub(">", "", meta$LDH)
+meta$LDH[meta$LDH == ""] <- NA
+table(meta$LDH)
+meta$LDH <- as.numeric(meta$LDH)
+
+
+#HgB A1C
+meta$Hgb_A1c <- gsub(">", "", meta$Hgb_A1c)
+meta$Hgb_A1c[meta$Hgb_A1c == ""] <- NA
+table(meta$Hgb_A1c)
+meta$Hgb_A1c <- as.numeric(meta$Hgb_A1c)
+
+
+
+meta <- meta %>%
+  dplyr::rename(Variant_Group_ = Variant_Group, 
+         Vaccine_Type_ = Vaccine_Type, 
+         Vaccine_Status_ = Vaccine_Status,
+         Sex_ = Sex,
+         Race_Ethnicity_ = Race.Ethnicity)
+
+
+```
+
+Encode categorical variables as their own columns 
+```{r}
+
+dummy <- dummyVars(" ~.", data = meta)
+
+meta_num <- data.frame(predict(dummy, newdata = meta))
+
+colnames(meta_num)
+
+```
+
+Add cell type frequencies and % sarscov2 cells to metadata table 
+```{r}
+#cell type frequencies 
+pt.df <- as.data.frame(table(obj$Coarse_Annotation, obj$Participant)) %>% 
+  dplyr::rename(Coarse_Annotation = Var1, Participant = Var2, Number_Cells = Freq) %>%
+  group_by(Participant) %>%
+  mutate(Total_Cells_Participant = sum(Number_Cells)) %>%
+  mutate(Percent_Cell_Type = Number_Cells / Total_Cells_Participant * 100) 
+
+pt.df$Coarse_Annotation <- gsub("-", "_", pt.df$Coarse_Annotation)
+
+celltype.freq <- data.frame(matrix(nrow = length(unique(pt.df$Participant)), ncol = length(unique(pt.df$Coarse_Annotation)), 
+                                   dimnames = list(unique(pt.df$Participant), 
+                                                   unique(pt.df$Coarse_Annotation))))
+
+for(pt in rownames(celltype.freq)){
+  for(celltype in colnames(celltype.freq)){
+    celltype.freq[pt, celltype] <- pt.df[pt.df$Coarse_Annotation == celltype & pt.df$Participant == pt, "Percent_Cell_Type"]
+    
+  }
+}
+
+colnames(celltype.freq) <- paste("Percent", colnames(celltype.freq), sep = "_")
+
+#frequency of sarscov2 + cells 
+sarscov2.df <- subset(as.data.frame(table(obj$SingleCell_SARSCoV2_RNA_Status, obj$Participant)) %>%
+  dplyr::rename(SARSCoV2_Status = Var1, Participant = Var2, Number_SARSCoV2_Pos = Freq) %>%
+  group_by(Participant) %>%
+  mutate(Total_Cells_Pt = sum(Number_SARSCoV2_Pos)) %>%
+  mutate(Pct_SARSCoV2_Pos = Number_SARSCoV2_Pos / Total_Cells_Pt * 100), SARSCoV2_Status == "SARSCoV2 RNA+") %>%
+  select(-SARSCoV2_Status) %>%
+  column_to_rownames("Participant")
+
+celltype.freq <- cbind(celltype.freq, sarscov2.df[,"Pct_SARSCoV2_Pos"]) 
+colnames(celltype.freq) <- c(colnames(celltype.freq)[1:13], "Percent_Viral_Pos")
+
+meta_celltypes <- cbind(meta_num, celltype.freq)
+
+```
+
+Calculate correlations
+```{r}
+
+meta_celltypes_cor_mat <- data.frame(matrix(nrow = 89, ncol = 89, dimnames = list(colnames(meta_celltypes), colnames(meta_celltypes))))
+meta_celltypes_pval_mat <- data.frame(matrix(nrow = 89, ncol = 89, dimnames = list(colnames(meta_celltypes), colnames(meta_celltypes))))
+
+#for(var1 in colnames(meta_num)){
+for(var1 in colnames(meta_celltypes)){ 
+  #print(var1)
+  for(var2 in colnames(meta_celltypes)){
+    #print(var2)
+    res = cor.test(meta_celltypes[,var1], meta_celltypes[,var2], method = 'spearman', exact = F)
+    meta_celltypes_cor_mat[var1, var2] <- res$estimate
+    meta_celltypes_pval_mat[var1, var2] <- res$p.value
+  }
+}
+
+
+#check that both "triangles" of the matrix are equal 
+for(row in 1:nrow(meta_celltypes_cor_mat)){
+  for (col in 1:ncol(meta_celltypes_cor_mat)){
+    if(!is.na(meta_celltypes_cor_mat[row,col])){
+    
+    if(meta_celltypes_cor_mat[row,col] != meta_celltypes_cor_mat[col, row]){
+      print(row,col)
+    }
+    }
+  }
+}
+
+
+for(row in 1:nrow(meta_celltypes_pval_mat)){
+  for (col in 1:ncol(meta_celltypes_pval_mat)){
+    if(!is.na(meta_celltypes_pval_mat[row,col])){
+    
+    if(meta_celltypes_pval_mat[row,col] != meta_celltypes_pval_mat[col, row]){
+      print(row,col)
+    }
+    }
+  }
+}
+
+```
+
+Calculate adjusted pvalues 
+```{r}
+meta_pvals_long <- meta_celltypes_pval_mat %>%
+  data.frame() %>% 
+  rownames_to_column("row_id") %>%  
+  pivot_longer(cols = -row_id, 
+               names_to = "col_id", 
+               values_to = "pval") %>% 
+  filter(!duplicated(paste0(pmax(row_id, col_id), pmin(row_id, col_id)))) %>%
+  mutate(pval_adj = p.adjust(pval, method = "BH")) 
+  
+
+#add correlation to a new column of this dataframe 
+sig_cor_df <- meta_pvals_long[meta_pvals_long$pval_adj < 0.05 & !is.na(meta_pvals_long$pval_adj),]
+
+sig_cor_df$Spearman_cor <- NA
+
+for(row in 1:length(rownames(sig_cor_df))){ 
+  var1 <- as.character(sig_cor_df[row, "row_id"])
+  var2 <- as.character(sig_cor_df[row, "col_id"])
+  
+  cor <- meta_celltypes_cor_mat[var1, var2] 
+  sig_cor_df[row, "Spearman_cor"] <- cor
+}
+
+sig_cor_df <- sig_cor_df[, c("row_id", "col_id", "Spearman_cor", "pval", "pval_adj")] %>%
+  dplyr::rename(Var1 = row_id, Var2 = col_id) %>%
+  filter(Var1 != Var2)
+
+
+
+```
+
+Edit column names for plot 
+```{r}
+meta_labels_df<- data.frame(matrix(nrow = ncol(meta_celltypes_cor_mat), ncol = 2, 
+                            dimnames = list(seq_len(ncol(meta_celltypes_cor_mat)), 
+                                            c("original_labels", "new_labels"))))
+
+meta_labels_df$original_labels <- colnames(meta_celltypes_cor_mat)
+
+
+meta_labels_df$new_labels <- c(
+"Variant Group: Ancestral",
+"Variant Group: Control",
+"Variant Group: Delta"   ,                      
+"Variant Group: Omicron",
+"Vaccine Status: Unvaccinated" ,
+"Vaccine Status: Vaccinated"    ,               
+"Vaccine Type: Moderna"          ,               
+"Vaccine Type: Other"             ,              
+"Vaccine Type: Pfizer"             ,            
+"Vaccine Doses"                     ,          
+"Age"                                ,          
+"Sex: F"                              ,         
+"Sex: M"                               ,         
+"Race/Ethnicity: American Indian/Alaska Native", 
+"Race/Ethnicity: Asian"                        ,
+"Race/Ethnicity: Black"                         ,
+"Race/Ethnicity: White Hispanic"                ,
+"Race/Ethnicity: White non-Hispanic"           ,
+"Days Symptom Onset to Hospital Presentation"  ,
+"Days Symptom Onset to Sample Collection"      ,
+"Days COVID Test Pos to Sample Collection"    ,
+"BMI"                                          ,
+"Smoking (y/n)"                                 ,     
+"Diabetes (y/n)"                                 ,   
+"CKD (y/n)"                                       ,   
+"CHF (y/n)"                                        ,  
+"Heart_Disease (y/n)"                               ,
+"Lung_Disease (y/n)"                                 ,
+"Pancreatitis (y/n)"                                 ,
+"HTN (y/n)"                                         ,
+"IBD (y/n)"                                          ,
+"Autoimmune_Disease (y/n)"                           ,
+"Immunosuppression (y/n)"                           ,
+"PPI (y/n)"                                          ,
+"Length of Hospital Stay"                         ,
+"Length of ICU Stay"                             ,
+"COVID-19 Severity Score (WHO): Swab"             ,                        
+"COVID-19 Severity Score (WHO): Peak"              ,                       
+"Days Symptom Onset to Peak WHO Score"              ,
+"Symptomatic (y/n)"                                  ,
+"Admitted (y/n)"                                     ,
+"Discharged (y/n)"                                  ,
+"Deceased (y/n)"   ,
+"Clinical Presentation: Diarrhea (y/n)"                                  ,
+"Clinical Presentation: Nausea (y/n)"                                   ,
+"Clinical Presentation: Vomiting (y/n)"                                  ,
+"Clinical Presentation: Pulmonary (y/n)"                                 ,
+"Treatment: Vasopressors (y/n)"                 ,               
+"Treatment: Highest Oxygen"                      ,         
+"Treatment: Steroids (y/n)"                       ,              
+"Treatment: Remdesivir (y/n)"                      ,            
+"Treatment: Antibiotics (y/n)"                      ,            
+"EGFR"                                         ,
+"BUN"                                         ,
+"sCr"                                          ,
+"INR"                                          ,
+"ALT"                                         ,
+"AST"                                          ,
+"D_Dimer"                                      ,
+"Procalcitonin"                               ,
+"Ferritin"                                     ,
+"LDH"                                          ,
+"proBNP"                                      ,
+"WBC (Peripheral Blood)"                       ,                   
+"Platelets (Peripheral Blood)"                  ,                  
+"Hgb"                                         ,
+"Hct"                                          ,
+"Neutrophils (Peripheral Blood)"                ,                  
+"Hgb A1c"                                     ,
+"Acute Liver Failure (y/n)"                    ,      
+"Elevated_Transaminases (y/n)"                  ,     
+"IgG Titer: RBD-W"                               ,    
+"IgM Titer: RBD-W"                                ,    
+"IgG Titer: RBD-D"                                 ,   
+"IgG Titer: NP",
+
+"% B Cells",                                       
+"% Basal Cells",                                        
+"% Ciliated Cells"   ,                                 
+"% Dendritic Cells"   ,                                 
+"% Deuterosomal Cells" ,                                
+"% Goblet Cells"        ,                              
+"% Ionocytes"             ,                       
+"% Monocytes/Macrophages" ,                         
+"% MT-high Cells"          ,                           
+"% SARSCoV2-high Cells"     ,                           
+"% Secretory Cells"          ,                          
+"% Squamous Cells"            ,                        
+"% T Cells"                    ,                   
+"% SARSCoV2 RNA+ Cells" )
+
+
+
+rownames(meta_celltypes_cor_mat) <- meta_labels_df$new_labels
+colnames(meta_celltypes_cor_mat) <- meta_labels_df$new_labels
+```
+
+Apply new column names to dataframe of significant pairs (results available in supplementary table 11)
+```{r}
+for(row in seq_len(nrow(meta_labels_df))){
+  old_label <- meta_labels_df[row, "original_labels"] 
+  
+  new_label <- meta_labels_df[row, "new_labels"] 
+  
+  sig_cor_df[sig_cor_df$Var1 == old_label, "Var1"] <- new_label
+  sig_cor_df[sig_cor_df$Var2 == old_label, "Var2"] <- new_label
+  
+}
+
+
+```
+
+Plot heatmap of all correlations 
+```{r}
+
+#cluster based on version with no zeros 
+clust <- hclust(dist(meta_celltypes_cor_mat))
+
+pheatmap(meta_celltypes_cor_mat, 
+         color = colorRampPalette(rev(brewer.pal(n = 9, name = "RdBu")))(100), #,
+         cluster_rows = clust, 
+         cluster_cols = clust)
+
+```
+
+
+
+Plot cell type x metadata heatmap 
+```{r}
+meta_celltypes_cor_sub <- meta_celltypes_cor_mat[grepl("%", rownames(meta_celltypes_cor_mat)), !grepl("%", rownames(meta_celltypes_cor_mat))]
+meta_celltypes_pval_sub <- meta_celltypes_pval_mat[grepl("%", rownames(meta_celltypes_pval_mat)), !grepl("%", rownames(meta_celltypes_pval_mat))]
+
+rownames(meta_celltypes_cor_sub) <- gsub(" (Nasal Swab)", "", rownames(meta_celltypes_cor_sub))
+
+clust_rows <- hclust(dist(meta_celltypes_cor_sub))
+clust_cols <- hclust(dist(t(meta_celltypes_cor_sub)))
+
+
+pheatmap(t(meta_celltypes_cor_sub), 
+         color = colorRampPalette(rev(brewer.pal(n = 9, name = "RdBu")))(100), 
+        cluster_rows = clust_cols, 
+        cluster_cols = clust_rows) 
+```
+
+
+#Cell subset and severity correlations 
+
+Load abundance matrix. This file is available as Supplementary Table 6. 
+To see how this abundance matrix was generated, see compositional analysis section of the notebook titled "02_Compositional_Cell_Subset_Analysis".
+```{r}
+abundance.mtx <- read.csv("Walsh2025_Supplementary_Table6_Abundance_Matrix.csv", row.names = 1)
+
+#log normalization 
+pt.abundance.df <- cbind(abundance.mtx[, 1:3], log(abundance.mtx[,4:60] + 1))
+
+#set severity score as numeric variable 
+pt.abundance.df$WHO_Score_at_Peak <- as.numeric(pt.abundance.df$WHO_Score_at_Peak)
+
+#subset to covid cases 
+pt.abundance.df.covid <- subset(pt.abundance.df, Variant_Group != "Control")
+
+#plot correlation between severity score and abundance of cell subset 
+plot.list <- list()
+for(cluster in colnames(pt.abundance.df)[4:length(colnames(pt.abundance.df))]) { 
+
+ plot.list[[cluster]] <- ggplot(pt.abundance.df.covid, aes(x = WHO_Score_at_Peak, 
+                                                                y = .data[[cluster]], 
+                                                                color = Variant_Group, fill = Variant_Group)) + 
+                                geom_point(size = 2) + 
+                                stat_cor(method = "spearman", label.x = 0, label.y = 5, show.legend = FALSE) + 
+                                geom_smooth(method = lm, alpha = .3) +
+                                scale_color_manual(values = pal.variants[2:4]) + 
+                                scale_fill_manual(values = pal.variants[2:4]) + 
+                                scale_x_continuous(breaks = c(0,1,2,3,4,5,6,7,8)) + 
+                                ylab(cluster) + 
+                                facet_wrap(~Variant_Group, scales = "free", ncol = 3) + 
+                                theme_classic() + 
+                                theme(panel.spacing = unit(2, "lines"),
+                                      strip.background = element_rect(fill = "lightgray"), 
+                                      strip.text = element_text(size = 12, face = "bold", color = "black"), 
+                                      axis.title = element_text(size = 10, face = "bold", color = "black"), 
+                                      axis.text = element_text(size = 10, color = "black"), 
+                                      legend.position = "none")
+ 
+}
+
+
+plot_grid(plotlist = plot.list, ncol = 1) 
+
+
+
+
+```
+
