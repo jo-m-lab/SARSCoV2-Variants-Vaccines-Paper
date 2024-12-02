@@ -1,0 +1,889 @@
+---
+title: "Participant Metadata Analysis"
+subtitle: "Figure 1b-1c, Table 1, Table 2, Extended Data Figure 1" 
+output: html_document
+---
+
+#Setup 
+
+Data is available for download from the Broad Single Cell Portal: https://singlecell.broadinstitute.org/single_cell/study/SCP2593 
+It is also provided as Supplementary Table 1 in the manuscript. 
+
+Set working directory to a folder containing the participant metadata table. 
+```{r setup, include=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = "~/Analysis_Files")
+```
+
+
+Load necessary libraries 
+```{r libraries} 
+#data wrangling
+library(dplyr) 
+
+#plotting 
+library(ggplot2) 
+library("RColorBrewer")
+
+#statistics 
+library(dunn.test) 
+
+```  
+
+
+Define color palettes 
+```{r palettes}
+pal.variants <- c("gray80", "aquamarine4","#9f67a0","lightsalmon2") 
+
+pal.variants.vax <- c("gray80", "aquamarine4","plum2", "darkorchid4","#efad66", "#ae5d19")
+
+```
+
+Load participant metadata. Establish desired order of variant and vaccination groups in plots.
+```{r load}
+meta <- read.csv("Supplementary_Table_1_Variant_Vax_Pt_Metadata.csv")
+
+meta$Variant_Group <- factor(meta$Variant_Group, levels = c("Control", "Ancestral", "Delta", "Omicron"))
+
+meta$Variant_Vax_Group <- factor(meta$Variant_Vax_Group, levels = c("Control", "Ancestral", "Delta Unvax", "Delta Vax", "Omicron Unvax", "Omicron Vax"))
+
+```
+
+#Viral variant sequencing results 
+
+Plot % of participants in each variant group with each major identified SARS-CoV-2 variant (SARSCoV2_Scorpio_Call)
+``` {r}
+
+#create dataframe for major SARS-CoV-2 variant 
+major.variant.df <- as.data.frame(table(meta$SARSCoV2_Scorpio_Call, meta$Variant_Group)) %>%
+  dplyr::rename(Major_Variant = Var1, Variant_Group = Var2, Number_Pts = Freq) %>%
+  filter(Variant_Group %in% c("Delta", "Omicron"))
+
+#set samples where viral sequencing was not done to "Undetermined" 
+major.variant.df$Major_Variant <- gsub("N/A", "Undetermined", major.variant.df$Major_Variant )
+
+#view all unique variants identified 
+unique(major.variant.df$Major_Variant)
+
+#set order of identified variants for plot 
+major.variant.df$Major_Variant <- factor(major.variant.df$Major_Variant, levels = c(
+                                                                                    "Alpha (B.1.1.7-like)", 
+                                                                                    "Gamma (P.1-like)", 
+                                                                                    "Delta (B.1.617.2-like)",
+                                                                                    "Probable Omicron (BA.1-like)", 
+                                                                                    "Omicron (BA.1-like)", 
+                                                                                    "Undetermined"))
+
+
+#stacked bar plot showing how many participants in the "Delta" group for scRNA-seq were infected with each identified variant 
+ggplot(major.variant.df, aes(x = Variant_Group, y = Number_Pts, fill = Major_Variant)) + 
+  geom_col(position = "fill", width = 0.5) + 
+  scale_fill_manual(values = c(brewer.pal(3, "Purples"), brewer.pal(3, "Oranges")[2:3], "gray")) + 
+  scale_y_continuous(expand = c(0,0)) + 
+  ylab("Fraction of Participants")  + 
+  theme_classic() + 
+  theme(axis.title.x = element_blank(), 
+        axis.title.y = element_text(color = "black", size = 14, face = "bold"), 
+        axis.text = element_text(color = "black", size = 12), 
+        legend.text = element_text(color = "black", size = 10))
+
+```
+
+
+Plot % of participants in each variant group with each identified SARS-CoV-2 sub-variant (SARSCoV2_Lineage)
+```{r}
+#create dataframe for SARS-CoV-2 variant subtype
+sub.variant.df <- as.data.frame(table(meta$SARSCoV2_Lineage, meta$Variant_Group)) %>%
+  dplyr::rename(Sub_Variant = Var1, Variant_Group = Var2, Number_Pts = Freq) %>%
+  filter(Variant_Group %in% c("Delta", "Omicron"))
+
+#set samples where viral sequencing was not done to "Undetermined" 
+sub.variant.df$Sub_Variant <- gsub("N/A", "Undetermined", sub.variant.df$Sub_Variant )
+
+#view all unique variants identified 
+unique(sub.variant.df$Sub_Variant)
+
+#set order of subvariants 
+sub.variant.df$Sub_Variant <- factor(sub.variant.df$Sub_Variant, levels = c("B.1.1.7", 
+                                                                            "P.1.12", 
+                                                                            "AY.100",
+                                                                            "AY.103",
+                                                                            "AY.25",
+                                                                            "AY.3",
+                                                                            "AY.3.1",
+                                                                            "AY.39", 
+                                                                            "AY.39.1", 
+                                                                            "AY.44", 
+                                                                            "BA.1", 
+                                                                            "BA.1.1", 
+                                                                            "BA.1.15", 
+                                                                            "Undetermined"))
+
+#stacked barplot 
+ggplot(sub.variant.df, aes(x = Variant_Group, y = Number_Pts, fill = Sub_Variant)) + 
+  geom_col(position = "fill", width = 0.5) + 
+  scale_fill_manual(values = c(brewer.pal(9, "Purples"), brewer.pal(9, "RdPu")[9], brewer.pal(3, "Oranges"), "gray")) + 
+  scale_y_continuous(expand = c(0,0)) + 
+  ylab("Fraction of Participants")  + 
+  theme_classic() + 
+  theme(axis.title.x = element_blank(), 
+        axis.title.y = element_text(color = "black", size = 14, face = "bold"), 
+        axis.text = element_text(color = "black", size = 12), 
+        legend.text = element_text(color = "black", size = 8))
+
+
+```
+
+
+
+#COVID-19 severity scores 
+
+Plot peak severity scores by variant group 
+```{r} 
+
+ggplot(meta, aes(x = Variant_Group, y = WHO_Score_at_Peak, color = Variant_Group)) + 
+  geom_jitter(width = .15, height = 0, size = 2) + 
+  scale_y_continuous(limits = c(-.5, 8.5), breaks = c(0,1,2,3,4,5,6,7,8), expand = c(0,0)) + 
+  scale_color_manual(values = pal.variants) + 
+  ylab("COVID-19 Severity Score (WHO)") + 
+  theme_classic() + 
+  theme(legend.position = "none", 
+        axis.title.x = element_blank(), 
+        axis.title.y = element_text(face = "bold", color = "black", size = 12), 
+        axis.text = element_text(color = "black", size = 10))
+
+
+#statistics 
+dunn.test(meta$WHO_Score_at_Peak, meta$Variant_Group, method = "bh", altp = TRUE)
+```
+
+Plot peak severity scores by vaccination group 
+```{r}
+
+ggplot(subset(meta, Variant_Group %in% c("Delta", "Omicron")), 
+       aes(x = Variant_Vax_Group, y = WHO_Score_at_Peak, color = Variant_Vax_Group)) + 
+  geom_jitter(width = .15, height = 0, size = 2) + 
+  scale_y_continuous(limits = c(-.5, 8.5), breaks = c(0,1,2,3,4,5,6,7,8), expand = c(0,0)) + 
+  scale_color_manual(values = pal.variants.vax[3:6]) + 
+  ylab("COVID-19 Severity Score (WHO)") + 
+  theme_classic() + 
+  theme(legend.position = "none", 
+        axis.title.x = element_blank(), 
+        axis.title.y = element_text(face = "bold", color = "black", size = 12), 
+        axis.text = element_text(color = "black", size = 10))
+
+
+dunn.test(meta$WHO_Score_at_Peak, meta$Variant_Vax_Group, method = "bh", altp = TRUE)
+```
+
+Plot change in severity score from time of swab to peak disease by variant and vaccination groups 
+```{r}
+#create dataframe with variant, vaccination status, who score at time of swab, and who score at time of peak disease 
+severity.df <- rbind(
+  meta[, c("Participant", "Variant_Group", "Variant_Vax_Group", "WHO_Score_at_Swab")] %>%
+    dplyr::rename(WHO_Score = WHO_Score_at_Swab) %>% 
+    mutate(Time_Point = "Swab"), 
+  
+  meta[, c("Participant", "Variant_Group", "Variant_Vax_Group", "WHO_Score_at_Peak")] %>%
+    dplyr::rename(WHO_Score = WHO_Score_at_Peak) %>% 
+    mutate(Time_Point = "Peak")
+  ) %>%
+  mutate(Variant_Timepoint = paste(Variant_Group, Time_Point)) %>%
+  mutate(Variant_Vax_Timepoint = paste(Variant_Vax_Group, Time_Point)) %>%
+  filter(Variant_Group != "Control")
+
+
+#set order of variant + timepoint to plot   
+severity.df$Variant_Timepoint <- factor(severity.df$Variant_Timepoint, levels = c("Ancestral Swab", "Ancestral Peak", 
+                                                                                  "Delta Swab", "Delta Peak", 
+                                                                                  "Omicron Swab", 
+                                                                                  "Omicron Peak"))
+
+#plot change in scores for variant 
+ggplot(severity.df, aes(x = Variant_Timepoint, y = WHO_Score, color = Variant_Group)) + 
+  geom_jitter(width = 0, height = 0, size = 2.5) + 
+  scale_y_continuous(limits = c(-.5, 8.5), breaks = c(0,1,2,3,4,5,6,7,8), expand = c(0,0)) + 
+  scale_color_manual(values = pal.variants[2:4]) + 
+  ylab("COVID-19 Severity Score (WHO)") + 
+  theme_classic() + 
+  theme(legend.position = "none", 
+        axis.title.x = element_blank(), 
+        axis.title.y = element_text(face = "bold", color = "black", size = 12), 
+        axis.text = element_text(color = "black", size = 10)) + 
+  geom_line(aes(group = Participant), color = "black")
+
+
+
+#set order of variant + vaccination group to plot 
+severity.df$Variant_Vax_Timepoint <- factor(severity.df$Variant_Vax_Timepoint, levels = c("Ancestral Swab", "Ancestral Peak", 
+                                                                                          "Delta Unvax Swab", "Delta Unvax Peak", 
+                                                                                          "Delta Vax Swab", "Delta Vax Peak", 
+                                                                                          "Omicron Unvax Swab", "Omicron Unvax Peak", 
+                                                                                          "Omicron Vax Swab", "Omicron Vax Peak"))
+
+#plot change in scores for variant + vaccination 
+ggplot(subset(severity.df, Variant_Group %in% c("Delta", "Omicron")), 
+       aes(x = Variant_Vax_Timepoint, y = WHO_Score, color = Variant_Vax_Group)) + 
+  geom_jitter(width = 0, height = 0, size = 2.5) + 
+  scale_color_manual(values = pal.variants.vax[3:6]) + 
+  scale_x_discrete(labels = function(x) stringr::str_wrap(x, width = 12)) +
+  scale_y_continuous(limits = c(-.5, 8.5), breaks = c(0,1,2,3,4,5,6,7,8), expand = c(0,0)) + 
+  ylab("COVID-19 Severity Score (WHO)") + 
+  theme_classic() + 
+  theme(legend.position = "none", 
+        axis.title.x = element_blank(), 
+        axis.title.y = element_text(face = "bold", color = "black", size = 12), 
+        axis.text = element_text(color = "black", size = 10)) + 
+  geom_line(aes(group = Participant), color = "black")
+
+
+
+```
+
+
+#Timing 
+
+Plot timing of disease course and sample collection by variant group 
+```{r} 
+
+#Days from positive SARS-CoV-2 test to sample collection 
+ggplot(subset(meta, Variant_Group != "Control"), 
+       aes(x = Variant_Group, y = Days_Pos_COVID_Test_to_Sample_Collection, color = Variant_Group)) + 
+  geom_jitter(width = .15, height = 0, size = 2) + 
+  scale_color_manual(values = pal.variants[2:4]) + 
+  theme_classic() + 
+  theme(legend.position = "none", 
+        axis.title.x = element_blank(), 
+        axis.title.y = element_text(face = "bold", color = "black", size = 12), 
+        axis.text = element_text(color = "black", size = 10))
+
+
+#Days from symptom onset to sample collection 
+ggplot(subset(meta, Variant_Group != "Control"), 
+       aes(x = Variant_Group, y = Days_Symptom_Onset_to_Sample_Collection, color = Variant_Group)) + 
+  geom_jitter(width = .15, height = 0, size = 2) + 
+  scale_y_continuous(breaks = c(0,5,10,15,20,25)) + 
+  scale_color_manual(values = pal.variants[2:4]) + 
+  theme_classic() + 
+  theme(legend.position = "none", 
+        axis.title.x = element_blank(), 
+        axis.title.y = element_text(face = "bold", color = "black", size = 12), 
+        axis.text = element_text(color = "black", size = 10))
+
+
+#Days from symptom onset to peak disease 
+ggplot(subset(meta, Variant_Group != "Control"), 
+       aes(x = Variant_Group, y = Days_Symptom_Onset_to_Peak_WHO_Score, color = Variant_Group)) + 
+  geom_jitter(width = .15, height = 0, size = 2) + 
+  scale_color_manual(values = pal.variants[2:4]) + 
+  theme_classic() + 
+  theme(legend.position = "none", 
+        axis.title.x = element_blank(), 
+        axis.title.y = element_text(face = "bold", color = "black", size = 12), 
+        axis.text = element_text(color = "black", size = 10))
+
+
+#Statistics 
+print("Days_Pos_COVID_Test_to_Sample_Collection")
+dunn.test(meta$Days_Pos_COVID_Test_to_Sample_Collection, meta$Variant_Group, method = "bh", altp = TRUE)
+
+print("Days_Symptom_Onset_to_Sample_Collection")
+dunn.test(meta$Days_Symptom_Onset_to_Sample_Collection, meta$Variant_Group, method = "bh", altp = TRUE)
+
+print("Days_Symptom_Onset_to_Peak_WHO_Score")
+dunn.test(meta$Days_Symptom_Onset_to_Peak_WHO_Score, meta$Variant_Group, method = "bh", altp = TRUE)
+```
+
+Plot timing of disease course and sample collection by vaccination group 
+```{r} 
+
+#Days from positive SARS-CoV-2 test to sample collection 
+ggplot(subset(meta, Variant_Vax_Group %in% c("Delta Unvax", "Delta Vax", "Omicron Unvax", "Omicron Vax")),
+       aes(x = Variant_Vax_Group, y = Days_Pos_COVID_Test_to_Sample_Collection, color = Variant_Vax_Group)) + 
+  geom_jitter(width = .15, height = 0, size = 2) + 
+  scale_color_manual(values = pal.variants.vax[3:6]) + 
+  theme_classic() + 
+  theme(legend.position = "none", 
+        axis.title.x = element_blank(), 
+        axis.title.y = element_text(face = "bold", color = "black", size = 12), 
+        axis.text = element_text(color = "black", size = 10))
+
+
+#Days from symptom onset to sample collection 
+ggplot(subset(meta, Variant_Vax_Group %in% c("Delta Unvax", "Delta Vax", "Omicron Unvax", "Omicron Vax")),
+       aes(x = Variant_Vax_Group, y = Days_Symptom_Onset_to_Sample_Collection, color = Variant_Vax_Group)) + 
+  geom_jitter(width = .15, height = 0, size = 2) + 
+  scale_y_continuous(breaks = c(0,5,10,15,20,25)) + 
+  scale_color_manual(values = pal.variants.vax[3:6]) + 
+  theme_classic() + 
+  theme(legend.position = "none", 
+        axis.title.x = element_blank(), 
+        axis.title.y = element_text(face = "bold", color = "black", size = 12), 
+        axis.text = element_text(color = "black", size = 10))
+
+
+#Days from symptom onset to peak disease 
+ggplot(subset(meta, Variant_Vax_Group %in% c("Delta Unvax", "Delta Vax", "Omicron Unvax", "Omicron Vax")),
+       aes(x = Variant_Vax_Group, y = Days_Symptom_Onset_to_Peak_WHO_Score, color = Variant_Vax_Group)) + 
+  geom_jitter(width = .15, height = 0, size = 2) + 
+  scale_color_manual(values = pal.variants.vax[3:6]) + 
+  theme_classic() + 
+  theme(legend.position = "none", 
+        axis.title.x = element_blank(), 
+        axis.title.y = element_text(face = "bold", color = "black", size = 12), 
+        axis.text = element_text(color = "black", size = 10))
+
+
+#Statistics 
+print("Days_Pos_COVID_Test_to_Sample_Collection")
+dunn.test(meta$Days_Pos_COVID_Test_to_Sample_Collection, meta$Variant_Vax_Group, method = "bh", altp = TRUE)
+
+print("Days_Symptom_Onset_to_Sample_Collection")
+dunn.test(meta$Days_Symptom_Onset_to_Sample_Collection, meta$Variant_Vax_Group, method = "bh", altp = TRUE)
+
+print("Days_Symptom_Onset_to_Peak_WHO_Score")
+dunn.test(meta$Days_Symptom_Onset_to_Peak_WHO_Score, meta$Variant_Vax_Group, method = "bh", altp = TRUE)
+```
+
+#Serology 
+
+Plot IgG titers for SARS-CoV-2 proteins by variant group 
+```{r}
+ 
+#RBD-W IgM 
+ggplot(subset(meta, Variant_Group %in% c("Control", "Ancestral")),
+       aes(x = Variant_Group, y = IgM_RBD_W, color = Variant_Group)) + 
+         geom_jitter(width = .1, height = 0) + 
+  scale_y_continuous(trans = "log10") + 
+  scale_color_manual(values = pal.variants[1:2]) + 
+  geom_hline(yintercept = 100, linetype = "dotted") + 
+  geom_hline(yintercept = 100000, linetype = "dotted") + 
+  theme_classic() + 
+  theme(legend.position = "none", 
+        axis.title.x = element_blank(), 
+        axis.title.y = element_text(face = "bold", color = "black", size = 12), 
+        axis.text = element_text(color = "black", size = 10))
+
+
+#RBD-W IgG 
+
+#set values below limit of detection to limit of detection
+meta$IgG_RBD_W[meta$IgG_RBD_W < 1000] <- 1000
+
+ggplot(subset(meta, Variant_Group != "Control"),
+       aes(x = Variant_Group, y = IgG_RBD_W, color = Variant_Group)) + 
+         geom_jitter(width = .1, height = 0) + 
+  scale_y_continuous(trans = "log10") + 
+  scale_color_manual(values = pal.variants[2:4]) + 
+  geom_hline(yintercept = 1000, linetype = "dotted") + 
+  geom_hline(yintercept = 1000000, linetype = "dotted") + 
+  theme_classic() + 
+  theme(legend.position = "none", 
+        axis.title.x = element_blank(), 
+        axis.title.y = element_text(face = "bold", color = "black", size = 12), 
+        axis.text = element_text(color = "black", size = 10)) 
+
+
+#RBD-D IgG 
+ggplot(subset(meta, Variant_Group %in% c("Delta", "Omicron")),
+       aes(x = Variant_Group, y = IgG_RBD_D, color = Variant_Group)) + 
+         geom_jitter(width = .1, height = 0) + 
+  scale_y_continuous(trans = "log10") + 
+  scale_color_manual(values = pal.variants[3:4]) + 
+  geom_hline(yintercept = 1000, linetype = "dotted") + 
+  geom_hline(yintercept = 1000000, linetype = "dotted") + 
+  theme_classic() + 
+  theme(legend.position = "none", 
+        axis.title.x = element_blank(), 
+        axis.title.y = element_text(face = "bold", color = "black", size = 12), 
+        axis.text = element_text(color = "black", size = 10)) 
+
+
+#NP IgG 
+ggplot(subset(meta, Variant_Group %in% c("Delta", "Omicron")),
+       aes(x = Variant_Group, y = IgG_NP, color = Variant_Group)) + 
+         geom_jitter(width = .1, height = 0) + 
+  scale_y_continuous(trans = "log10") + 
+  scale_color_manual(values = pal.variants[3:4]) + 
+  geom_hline(yintercept = 1000, linetype = "dotted") + 
+  geom_hline(yintercept = 1000000, linetype = "dotted") + 
+  theme_classic() + 
+  theme(legend.position = "none", 
+        axis.title.x = element_blank(), 
+        axis.title.y = element_text(face = "bold", color = "black", size = 12), 
+        axis.text = element_text(color = "black", size = 10)) 
+
+
+#Statistics
+print("IgM_RBD_W")
+dunn.test(meta$IgM_RBD_W, meta$Variant_Group, method = "bh", altp = TRUE)
+
+print("IgG_RBD_W")
+print(table(meta$IgG_RBD_W, meta$Variant_Group))
+dunn.test(meta$IgG_RBD_W, meta$Variant_Group, method = "bh", altp = TRUE)
+
+print("IgG_RBD_D")
+dunn.test(meta$IgG_RBD_D, meta$Variant_Group, method = "bh", altp = TRUE)
+
+print("IgG_NP")
+dunn.test(meta$IgG_NP, meta$Variant_Group, method = "bh", altp = TRUE)
+
+
+```
+
+Plot IgG titers for SARS-CoV-2 proteins by vaccination group 
+```{r}
+#RBD-W IgG 
+ggplot(subset(meta, Variant_Group %in% c("Delta", "Omicron")),
+       aes(x = Variant_Vax_Group, y = IgG_RBD_W, color = Variant_Vax_Group)) + 
+         geom_jitter(width = .1, height = 0, size = 2) + 
+  scale_y_continuous(trans = "log10") + 
+  scale_color_manual(values = pal.variants.vax[3:6]) + 
+  geom_hline(yintercept = 1000, linetype = "dotted") + 
+  geom_hline(yintercept = 1000000, linetype = "dotted") + 
+  #geom_boxplot() + 
+  theme_classic() + 
+  theme(legend.position = "none", 
+        axis.title.x = element_blank(), 
+        axis.title.y = element_text(face = "bold", color = "black", size = 12), 
+        axis.text = element_text(color = "black", size = 10)) 
+
+
+#RBD-D IgG 
+ggplot(subset(meta, Variant_Group %in% c("Delta", "Omicron")),
+       aes(x = Variant_Vax_Group, y = IgG_RBD_D, color = Variant_Vax_Group)) + 
+         geom_jitter(width = .1, height = 0, size = 2) + 
+  scale_y_continuous(trans = "log10") + 
+  scale_color_manual(values = pal.variants.vax[3:6]) + 
+  geom_hline(yintercept = 1000, linetype = "dotted") + 
+  geom_hline(yintercept = 1000000, linetype = "dotted") + 
+  theme_classic() + 
+  theme(legend.position = "none", 
+        axis.title.x = element_blank(), 
+        axis.title.y = element_text(face = "bold", color = "black", size = 12), 
+        axis.text = element_text(color = "black", size = 10)) 
+
+
+#NP IGG 
+ggplot(subset(meta, Variant_Group %in% c("Delta", "Omicron")),
+       aes(x = Variant_Vax_Group, y = IgG_NP, color = Variant_Vax_Group)) + 
+         geom_jitter(width = .1, height = 0, size = 2) + 
+  scale_y_continuous(trans = "log10") + 
+  scale_color_manual(values = pal.variants.vax[3:6]) + 
+  geom_hline(yintercept = 1000, linetype = "dotted") + 
+  geom_hline(yintercept = 1000000, linetype = "dotted") + 
+  theme_classic() + 
+  theme(legend.position = "none", 
+        axis.title.x = element_blank(), 
+        axis.title.y = element_text(face = "bold", color = "black", size = 12), 
+        axis.text = element_text(color = "black", size = 10)) 
+
+
+#Statistics
+print("IgG_RBD_W")
+dunn.test(meta$IgG_RBD_W, meta$Variant_Vax_Group, method = "bh", altp = TRUE)
+
+print("IgG_RBD_D")
+dunn.test(meta$IgG_RBD_D, meta$Variant_Vax_Group, method = "bh", altp = TRUE)
+
+print("IgG_NP")
+dunn.test(meta$IgG_NP, meta$Variant_Vax_Group, method = "bh", altp = TRUE)
+
+```
+
+
+
+
+#Vaccine timing 
+
+Plot timing of vaccination relative to infection for vaccinated Delta and Omicron cases
+```{r}
+#time from first vaccine dose to positive SARS-CoV-2 PCR test 
+ggplot(subset(meta, Variant_Vax_Group %in% c("Delta Vax", "Omicron Vax")), 
+       aes(x = Variant_Vax_Group, 
+           y = Days_Vax_Dose_1_to_Pos_COVID_Test, 
+           color = Variant_Vax_Group)) + 
+  geom_jitter(width = .15, height = 0, size = 2) + 
+  scale_color_manual(values = c(pal.variants.vax[4], pal.variants.vax[6])) + 
+  theme_classic() + 
+  theme(legend.position = "none", 
+        plot.title = element_text(face = "bold", color = "black", size = 12),
+        axis.title.x = element_blank(), 
+        axis.title.y = element_text(face = "bold", color = "black", size = 12), 
+        axis.text = element_text(color = "black", size = 10))
+
+
+#time from most recent vaccine dose to positive SARS-CoV-2 PCR test 
+ggplot(subset(meta, Variant_Vax_Group %in% c("Delta Vax", "Omicron Vax")), 
+       aes(x = Variant_Vax_Group, 
+           y = Days_Vax_Dose_Recent_to_Pos_COVID_Test, 
+           color = Variant_Vax_Group)) + 
+  geom_jitter(width = .15, height = 0, size = 2) + 
+  scale_color_manual(values = c(pal.variants.vax[4], pal.variants.vax[6])) + 
+  theme_classic() + 
+  theme(legend.position = "none", 
+        plot.title = element_text(face = "bold", color = "black", size = 12),
+        axis.title.x = element_blank(), 
+        axis.title.y = element_text(face = "bold", color = "black", size = 12), 
+        axis.text = element_text(color = "black", size = 10))
+
+
+```
+
+
+
+#Statistics Table 1 & 2 
+
+Table 1 - print information for variant groups 
+```{r}
+
+#Age
+print("AGE")
+print("Control summary stats")
+summary(subset(meta, Variant_Group == "Control")$Age)
+print("Ancestral summary stats")
+summary(subset(meta, Variant_Group == "Ancestral")$Age)
+print("Delta summary stats")
+summary(subset(meta, Variant_Group == "Delta")$Age)
+print("Omicron summary stats")
+summary(subset(meta, Variant_Group == "Omicron")$Age)
+print("Age KW test with Dunn Post-Hoc")
+dunn.test(meta$Age, meta$Variant_Group, method = "bh", altp = T)
+
+#Sex
+print("SEX")
+table(meta$Sex, meta$Variant_Group)
+print("Sex Chisq Test")
+chisq.test(meta$Sex, meta$Variant_Group)
+
+#Ethnicity
+print("ETHNICITY")
+meta$Ethnicity <- ifelse(grepl("White, Hispanic", meta$Race.Ethnicity) == TRUE, 
+                             "Hispanic", 
+                             "Not Hispanic")
+table(meta$Ethnicity, meta$Variant_Group)
+print("Ethnicity ChisqTest")
+chisq.test(meta$Ethnicity, meta$Variant_Group)
+
+#Race 
+print("RACE")
+meta$Race <- ifelse(grepl("White", meta$Race.Ethnicity) == TRUE, 
+                             "Caucasian", 
+                             meta$Race.Ethnicity)
+meta$Race[meta$Race == "Black "] <- "Black"
+table(meta$Race, meta$Variant_Group)
+print("Race ChisqTest")
+chisq.test(meta$Race, meta$Variant_Group)
+race.chisq <- chisq.test(meta$Race, meta$Variant_Group)
+print( "Race Chisq Test Residuals") 
+race.chisq$stdres
+
+#WHO scores peak
+print("WHO SCORE PEAK" )
+print("Control summary stats")
+summary(subset(meta, Variant_Group == "Control")$WHO_Score_at_Peak)
+print("Ancestral summary stats")
+summary(subset(meta, Variant_Group == "Ancestral")$WHO_Score_at_Peak)
+print("Delta summary stats")
+summary(subset(meta, Variant_Group == "Delta")$WHO_Score_at_Peak)
+print("Omicron summary stats")
+summary(subset(meta, Variant_Group == "Omicron")$WHO_Score_at_Peak)
+print("WHO peak KW test with Dunn Post-Hoc")
+dunn.test(meta$WHO_Score_at_Peak, meta$Variant_Group, method = "bh", altp = T)
+
+#WHO scores at swab
+print("WHO SCORE SWAB" )
+print("Control summary stats")
+summary(subset(meta, Variant_Group == "Control")$WHO_Score_at_Swab)
+print("Ancestral summary stats")
+summary(subset(meta, Variant_Group == "Ancestral")$WHO_Score_at_Swab)
+print("Delta summary stats")
+summary(subset(meta, Variant_Group == "Delta")$WHO_Score_at_Swab)
+print("Omicron summary stats")
+summary(subset(meta, Variant_Group == "Omicron")$WHO_Score_at_Swab)
+print("WHO at swab KW test with Dunn Post-Hoc")
+dunn.test(meta$WHO_Score_at_Swab, meta$Variant_Group, method = "bh", altp = T)
+
+
+#VACCINE STATUS 
+print("VACCINE STATUS") 
+table(meta$Vaccine_Status, meta$Variant_Group)
+print("Vaccination ChiSq test")
+chisq.test(meta$Vaccine_Status, meta$Variant_Group)
+vax.chisq <- chisq.test(meta$Vaccine_Status, meta$Variant_Group) 
+print( "Vax Chisq Test Residuals") 
+vax.chisq$stdres
+
+#BMI 
+print("BMI") 
+print("Control summary stats")
+summary(subset(meta, Variant_Group == "Control")$BMI)
+print("Ancestral summary stats")
+summary(subset(meta, Variant_Group == "Ancestral")$BMI)
+print("Delta summary stats")
+summary(subset(meta, Variant_Group == "Delta")$BMI)
+print("Omicron summary stats")
+summary(subset(meta, Variant_Group == "Omicron")$BMI)
+print("BMI KW test with Dunn Post-Hoc")
+dunn.test(meta$BMI, meta$Variant_Group, method = "bh", altp = T)
+
+#Diabetes 
+print("DIABETES")
+table(meta$Diabetes, meta$Variant_Group)
+print("Diabetes ChiSq test")
+chisq.test(meta$Diabetes, meta$Variant_Group)
+diab.chisq <- chisq.test(meta$Diabetes, meta$Variant_Group) 
+print( "Diabetes Chisq Test Residuals") 
+diab.chisq$stdres
+
+#Kidney 
+print("KIDNEY DISEASE") 
+table(meta$CKD, meta$Variant_Group)
+print("Kidney Disease ChiSq test")
+chisq.test(meta$CKD, meta$Variant_Group)
+
+
+#CHF
+print("CONGESTIVE HEART FAILURE") 
+table( meta$CHF, meta$Variant_Group)
+print("Congestive Heart Failure ChiSq test")
+chisq.test(meta$CHF, meta$Variant_Group)
+chf.chisq <- chisq.test(meta$CHF, meta$Variant_Group) 
+print( "CHF Chisq Test Residuals") 
+chf.chisq$stdres
+
+#Lung Disorder 
+print("LUNG DISEASE") 
+table(meta$Lung_Disease, meta$Variant_Group )
+print("Lung Disease ChiSq test")
+chisq.test(meta$Lung_Disease, meta$Variant_Group)
+
+#Hypertension
+print("HYPERTENSION") 
+table(meta$HTN, meta$Variant_Group)
+print("Hypertension ChiSq test")
+chisq.test(meta$HTN, meta$Variant_Group)
+
+#IBD 
+print("IBD") 
+table(meta$IBD, meta$Variant_Group)
+print("IBD ChiSq test")
+chisq.test(meta$IBD, meta$Variant_Group) 
+ibd.chisq <- chisq.test(meta$IBD, meta$Variant_Group) 
+print( "IBD Chisq Test Residuals") 
+ibd.chisq$stdres
+
+
+#Treatments 
+#Steroids 
+print("STEROIDS")
+table(meta$Steroids, meta$Variant_Group)
+print("Steroids ChiSq Test") 
+chisq.test(subset(meta, Variant_Group != "Control")$Steroids, subset(meta, Variant_Group != "Control")$Variant_Group)
+
+#Remdesivir
+print("REMDESIVIR")
+table(meta$Remdesivir , meta$Variant_Group)
+print("Remdesivir ChiSq Test") 
+chisq.test(subset(meta, Variant_Group != "Control")$Remdesivir , subset(meta, Variant_Group != "Control")$Variant_Group)
+rem.chisq <- chisq.test(subset(meta, Variant_Group != "Control")$Remdesivir , subset(meta, Variant_Group != "Control")$Variant_Group)
+print( "IBD Chisq Test Residuals") 
+rem.chisq$stdres
+
+
+
+#Mortality 
+print("MORTALITY")
+table(meta$Deceased, meta$Variant_Group)
+print("Deceased ChiSq Test") 
+chisq.test(meta$Deceased, meta$Variant_Group)
+
+mort.chisq <- chisq.test(meta$Deceased, meta$Variant_Group) 
+print( "Mortality Chisq Test Residuals") 
+mort.chisq$stdres
+
+```
+
+Table 2 - print information for vaccination groups 
+```{r}
+meta_sub <- subset(meta, Variant_Group %in% c("Delta", "Omicron"))
+
+#Age
+print("AGE")
+print("Delta Unvax summary stats")
+summary(subset(meta_sub, Variant_Vax_Group == "Delta Unvax")$Age)
+print("Delta Vax summary stats")
+summary(subset(meta_sub, Variant_Vax_Group == "Delta Vax")$Age)
+print("Omicron Unvax summary stats")
+summary(subset(meta_sub, Variant_Vax_Group == "Omicron Unvax")$Age)
+print("Omicron Vax summary stats")
+summary(subset(meta_sub, Variant_Vax_Group == "Omicron Vax")$Age)
+print("Age KW test with Dunn Post-Hoc")
+dunn.test(meta_sub$Age, meta_sub$Variant_Vax_Group)
+age_res <- dunn.test(meta_sub$Age, meta_sub$Variant_Vax_Group, method = "bh", altp = T)
+
+#Sex
+meta_sub$Sex[meta_sub$Sex == "M "] <- "M"
+print("SEX")
+table(meta_sub$Sex, meta_sub$Variant_Vax_Group)
+print("Sex Chisq Test")
+chisq.test(meta_sub$Sex, meta_sub$Variant_Vax_Group) 
+sex.chisq <- chisq.test(meta_sub$Sex, meta_sub$Variant_Vax_Group)
+print( "Sex Chisq Test Residuals") 
+sex.chisq$stdres 
+
+#Ethnicity
+print("ETHNICITY")
+meta_sub$Ethnicity <- ifelse(grepl("White, Hispanic", meta_sub$Race.Ethnicity) == TRUE, 
+                             "Hispanic", 
+                             "Not Hispanic")
+#table(meta_sub$Race.Ethnicity, meta_sub$Ethnicity)
+table(meta_sub$Ethnicity, meta_sub$Variant_Vax_Group)
+print("Ethnicity ChisqTest")
+#chisq.test(meta_sub$Ethnicity, meta_sub$Variant_Vax_Group)
+
+#Race 
+print("RACE")
+meta_sub$Race <- ifelse(grepl("White", meta_sub$Race.Ethnicity) == TRUE, 
+                             "Caucasian", 
+                             meta_sub$Race.Ethnicity)
+meta_sub$Race[meta_sub$Race == "Black "] <- "Black"
+#table(meta_sub$Race.Ethnicity, meta_sub$Race)
+table(meta_sub$Race, meta_sub$Variant_Vax_Group)
+print("Race ChisqTest")
+chisq.test(meta_sub$Race, meta_sub$Variant_Vax_Group)
+race.chisq <- chisq.test(meta_sub$Race, meta_sub$Variant_Vax_Group)
+print( "Race Chisq Test Residuals") 
+race.chisq$stdres
+
+
+#WHO scores peak
+print("WHO SCORE PEAK" )
+print("Delta Unvax summary stats")
+summary(subset(meta_sub, Variant_Vax_Group == "Delta Unvax")$WHO_Score_at_Peak)
+print("Delta Vax summary stats")
+summary(subset(meta_sub, Variant_Vax_Group == "Delta Vax")$WHO_Score_at_Peak)
+print("Omicron Unvax summary stats")
+summary(subset(meta_sub, Variant_Vax_Group == "Omicron Unvax")$WHO_Score_at_Peak)
+print("Omicron Vax summary stats")
+summary(subset(meta_sub, Variant_Vax_Group == "Omicron Vax")$WHO_Score_at_Peak)
+print("WHO peak KW test with Dunn Post-Hoc")
+dunn.test(meta_sub$WHO_Score_at_Peak, meta_sub$Variant_Vax_Group, method = "bh", altp = T)
+
+#WHO scores at swab
+print("WHO SCORE SWAB" )
+print("Delta Unvax summary stats")
+summary(subset(meta_sub, Variant_Vax_Group == "Delta Unvax")$WHO_Score_at_Swab)
+print("Delta Vax summary stats")
+summary(subset(meta_sub, Variant_Vax_Group == "Delta Vax")$WHO_Score_at_Swab)
+print("Omicron Unvax summary stats")
+summary(subset(meta_sub, Variant_Vax_Group == "Omicron Unvax")$WHO_Score_at_Swab)
+print("Omicron Vax summary stats")
+summary(subset(meta_sub, Variant_Vax_Group == "Omicron Vax")$WHO_Score_at_Swab)
+print("WHO at swab KW test with Dunn Post-Hoc")
+dunn.test(meta_sub$WHO_Score_at_Swab, meta_sub$Variant_Vax_Group, method = "bh", altp = T)
+
+
+#VACCINE STATUS 
+print("VACCINE STATUS") 
+table(meta_sub$Vaccine_Status, meta_sub$Variant_Vax_Group)
+print("Vaccination ChiSq test")
+chisq.test(meta_sub$Vaccine_Status, meta_sub$Variant_Vax_Group)
+vax.chisq <- chisq.test(meta_sub$Vaccine_Status, meta_sub$Variant_Vax_Group) 
+print( "Vax Chisq Test Residuals") 
+vax.chisq$stdres
+
+#BMI 
+print("BMI") 
+print("Delta Unvax summary stats")
+summary(subset(meta_sub, Variant_Vax_Group == "Delta Unvax")$BMI)
+print("Delta Vax summary stats")
+summary(subset(meta_sub, Variant_Vax_Group == "Delta Vax")$BMI)
+print("Omicron Unvax summary stats")
+summary(subset(meta_sub, Variant_Vax_Group == "Omicron Unvax")$BMI)
+print("Omicron Vax summary stats")
+summary(subset(meta_sub, Variant_Vax_Group == "Omicron Vax")$BMI)
+print("BMI KW test with Dunn Post-Hoc")
+dunn.test(meta_sub$BMI, meta_sub$Variant_Vax_Group, method = "bh", altp = T)
+
+#Diabetes 
+print("DIABETES")
+table(meta_sub$Diabetes, meta_sub$Variant_Vax_Group)
+print("Diabetes ChiSq test")
+chisq.test(meta_sub$Diabetes, meta_sub$Variant_Vax_Group)
+diab.chisq <- chisq.test(meta_sub$Diabetes, meta_sub$Variant_Vax_Group) 
+print( "Diabetes Chisq Test Residuals") 
+diab.chisq$stdres
+
+#Kidney 
+print("KIDNEY DISEASE") 
+table(meta_sub$CKD, meta_sub$Variant_Vax_Group)
+print("Kidney Disease ChiSq test")
+chisq.test(meta_sub$CKD, meta_sub$Variant_Vax_Group)
+
+
+#CHF
+print("CONGESTIVE HEART FAILURE") 
+table( meta_sub$CHF, meta_sub$Variant_Vax_Group)
+print("Congestive Heart Failure ChiSq test")
+chisq.test(meta_sub$CHF, meta_sub$Variant_Vax_Group)
+chf.chisq <- chisq.test(meta_sub$CHF, meta_sub$Variant_Vax_Group) 
+print( "CHF Chisq Test Residuals") 
+chf.chisq$stdres
+
+#Lung Disorder 
+print("LUNG DISEASE") 
+table(meta_sub$Lung_Disease, meta_sub$Variant_Vax_Group )
+print("Lung Disease ChiSq test")
+chisq.test(meta_sub$Lung_Disease, meta_sub$Variant_Vax_Group)
+
+#Hypertension
+print("HYPERTENSION") 
+table(meta_sub$HTN, meta_sub$Variant_Vax_Group)
+print("Hypertension ChiSq test")
+chisq.test(meta_sub$HTN, meta_sub$Variant_Vax_Group)
+
+#IBD 
+print("IBD") 
+table(meta_sub$IBD, meta_sub$Variant_Vax_Group)
+print("IBD ChiSq test")
+chisq.test(meta_sub$IBD, meta_sub$Variant_Vax_Group) 
+ibd.chisq <- chisq.test(meta_sub$IBD, meta_sub$Variant_Vax_Group) 
+print( "IBD Chisq Test Residuals") 
+ibd.chisq$stdres
+
+
+#Treatments 
+#Steroids 
+print("STEROIDS")
+table(meta_sub$Steroids, meta_sub$Variant_Vax_Group)
+print("Steroids ChiSq Test") 
+chisq.test(meta_sub$Steroids, meta_sub$Variant_Vax_Group)
+steroids.chisq <- chisq.test(meta_sub$Steroids, meta_sub$Variant_Vax_Group)
+print( "Steroids Chisq Test Residuals") 
+steroids.chisq$stdres
+
+
+#Remdesivir
+print("REMDESIVIR")
+table(meta_sub$Remdesivir , meta_sub$Variant_Vax_Group)
+print("Remdesivir ChiSq Test") 
+chisq.test(subset(meta_sub, Variant_Vax_Group != "Control")$Remdesivir , subset(meta_sub, Variant_Vax_Group != "Control")$Variant_Vax_Group)
+rem.chisq <- chisq.test(subset(meta_sub, Variant_Vax_Group != "Control")$Remdesivir , subset(meta_sub, Variant_Vax_Group != "Control")$Variant_Vax_Group)
+print( "Remdesivir Chisq Test Residuals") 
+rem.chisq$stdres
+
+
+
+#Mortality 
+print("MORTALITY")
+table(meta_sub$Deceased, meta_sub$Variant_Vax_Group)
+print("Deceased ChiSq Test") 
+chisq.test(meta_sub$Deceased, meta_sub$Variant_Vax_Group)
+
+mort.chisq <- chisq.test(meta_sub$Deceased, meta_sub$Variant_Vax_Group) 
+print( "Mortality Chisq Test Residuals") 
+mort.chisq$stdres
+
+```
+
