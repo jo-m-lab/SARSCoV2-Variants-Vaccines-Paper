@@ -57,7 +57,7 @@ Gene lists necessary for these plots can be found in supplementary table 10.
 Add module scores 
 ```{r}
 #read in gene lists 
-cytokine_lists <- read.csv(file = "Walsh2025_Supplementary_Table10_Nasal_ISG.csv")
+cytokine_lists <- read.csv(file = "Walsh2025_Supplementary_Table10_Nasal_Cytokine_Stim.csv")
 
 #create lists of genes that were upregulated in multiple donors 
 ifna.genes <- list(intersect(cytokine_lists$IFNA_Donor1, cytokine_lists$IFNA_Donor2))
