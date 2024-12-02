@@ -1,4 +1,4 @@
-# SARS-CoV-2 Variant-Vax Nasal Immunity Study (2025) Code Repo
+# SARS-CoV-2 Variant-Vax Nasal Immunity Study (2025)
 
 This repository contains code and analysis to replicate the findings of [Walsh et al](https://www.biorxiv.org/content/10.1101/2024.05.29.596308v1). 
 In this study, we compared nasal immune responses to SARS-CoV-2 across the ancestral, Delta, and Omicron waves using nasal swab scRNA-seq. 
